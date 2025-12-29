@@ -111,6 +111,7 @@ interface Article {
   authorAvatar: string;
   languageCode: string; 
   languageName: string; 
+  audioUrl?: string;
 }
 
 interface Question {
@@ -224,7 +225,7 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
         'select_cat': 'Select Category',
         'select_level': 'Select Level',
         'add_cover': 'Add Cover Image (URL)',
-        'add_audio': 'Add Audio Clip',
+        'add_audio': 'Add Audio Clip (URL)',
         'optional': '(Optional)',
         'start_writing': 'Start writing your story here...',
         'tap_highlight': 'Tap a word to select it, then tap a level color below to highlight it.',
@@ -286,7 +287,7 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
         'select_cat': 'Selecione a Categoria',
         'select_level': 'Selecione o Nível',
         'add_cover': 'Adicionar Capa (URL)',
-        'add_audio': 'Adicionar Áudio',
+        'add_audio': 'Adicionar Áudio (URL)',
         'optional': '(Opcional)',
         'start_writing': 'Comece a escrever aqui...',
         'tap_highlight': 'Toque numa palavra para selecionar, depois escolha uma cor abaixo.',
@@ -572,6 +573,7 @@ const EditorView = ({language, onClose, onPublish, t}: any) => {
     const [subtitle, setSubtitle] = useState('');
     const [content, setContent] = useState('');
     const [image, setImage] = useState('');
+    const [audio, setAudio] = useState('');
     const [level, setLevel] = useState('N5');
     const [category, setCategory] = useState('Culture');
 
@@ -589,7 +591,8 @@ const EditorView = ({language, onClose, onPublish, t}: any) => {
             level,
             tags: [category],
             languageCode: language === 'Japanese' ? 'ja-JP' : 'en-US',
-            languageName: language
+            languageName: language,
+            audioUrl: audio 
         };
         onPublish(newArticle);
     };
@@ -629,7 +632,21 @@ const EditorView = ({language, onClose, onPublish, t}: any) => {
                             value={category} onChange={e => setCategory(e.target.value)}
                             className="w-full p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 dark:text-white outline-none"
                         >
-                            <option>Culture</option><option>Science</option><option>Life</option><option>Tech</option>
+                            <option>Culture</option>
+                            <option>Science</option>
+                            <option>Life</option>
+                            <option>Tech</option>
+                            <option>Travel</option>
+                            <option>Food</option>
+                            <option>Business</option>
+                            <option>News</option>
+                            <option>Entertainment</option>
+                            <option>History</option>
+                            <option>Health</option>
+                            <option>Art</option>
+                            <option>Sports</option>
+                            <option>Grammar</option>
+                            <option>Vocabulary</option>
                         </select>
                      </div>
                      <div>
@@ -652,6 +669,18 @@ const EditorView = ({language, onClose, onPublish, t}: any) => {
                             className="flex-1 p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none dark:text-white" 
                             placeholder="https://..."
                             value={image} onChange={e => setImage(e.target.value)}
+                        />
+                    </div>
+                </div>
+
+                <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-2">{t('add_audio')}</label>
+                    <div className="flex gap-2">
+                        <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl text-slate-400"><Mic size={20}/></div>
+                        <input 
+                            className="flex-1 p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none dark:text-white" 
+                            placeholder="https://... (mp3/wav)"
+                            value={audio} onChange={e => setAudio(e.target.value)}
                         />
                     </div>
                 </div>
@@ -1000,7 +1029,23 @@ const ProfileView = ({ profile, isWriterUnlocked, onOpenLangPicker, onOpenSettin
 
 // --- READER COMPONENT ---
 const Reader = ({ article, onClose, comments, onUpdateComments, isSaved, onToggleSave }: any) => {
-    return <div className="fixed inset-0 bg-white dark:bg-[#0f1115] z-50 flex flex-col animate-slide-up"><div className="p-4 flex justify-between"><button onClick={onClose}><ChevronLeft/></button></div><div className="p-6"><h1>{article.title}</h1><p>{article.content}</p></div></div>
+    return (
+        <div className="fixed inset-0 bg-white dark:bg-[#0f1115] z-50 flex flex-col animate-slide-up">
+            <div className="p-4 flex justify-between">
+                <button onClick={onClose}><ChevronLeft/></button>
+            </div>
+            <div className="p-6 overflow-y-auto">
+                {article.audioUrl && (
+                    <div className="mb-6 bg-slate-50 dark:bg-slate-800 p-4 rounded-xl">
+                        <div className="text-xs font-bold text-slate-400 uppercase mb-2">Audio Story</div>
+                        <audio controls src={article.audioUrl} className="w-full" />
+                    </div>
+                )}
+                <h1 className="text-2xl font-bold mb-4 dark:text-white">{article.title}</h1>
+                <p className="text-lg leading-relaxed text-slate-700 dark:text-slate-300 whitespace-pre-wrap">{article.content}</p>
+            </div>
+        </div>
+    );
 };
 
 // --- APP COMPONENT ---

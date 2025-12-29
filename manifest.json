@@ -1,0 +1,16 @@
+{
+  "name": "WenLang",
+  "short_name": "WenLang",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#FF8C00",
+  "description": "Language learning made simple.",
+  "icons": [
+    {
+      "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MTIiIGhlaWdodD0iNTEyIiB2aWV3Qm94PSIwIDAgNTEyIDUxMiI+CiAgPGRlZnM+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImdyYWQxIiB4MT0iMCUiIHkxPSIwJSIgeDI9IjEwMCUiIHkyPSIxMDAlIj4KICAgICAgPHN0b3Agb2Zmc2V0PSIwJSIgc3R5bGU9InN0b3AtY29sb3I6I0ZGQjM0NztzdG9wLW9wYWNpdHk6MSIgLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxMDAlIiBzdHlsZT0ic3RvcC1jb2xvcjojRkY4QzAwO3N0b3Atb3BhY2l0eToxIiAvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICA8L2RlZnM+CiAgPHJlY3Qgd2lkdGg9IjUxMiIgaGVpZ2h0PSI1MTIiIHJ4PSIxMjgiIGZpbGw9InVybCgjZ3JhZDEpIi8+CiAgPHBhdGggZD0iTTQyMCAxMjAgUSA0NjAgMTIwIDQ3MCAxNjAgUSA0NzAgMTgwIDQ1MCAyMDAgTCA0MjAgMTIwIiBmaWxsPSIjRkZEMTgwIiBvcGFjaXR5PSIwLjUiLz4KICA8dGV4dCB4PSIyNTYiIHk9IjM1MCIgZm9udC1mYW1pbHk9IkFyaWFsLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjI4MCIgZm9udC13ZWlnaHQ9IjkwMCIgZmlsbD0id2hpdGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPldMPC90ZXh0PgogIDxwYXRoIGQ9Ik0xNDAgNDIwIFEgMTAwIDQ2MCA2MCA0NDAgTCAxMjAgMzgwIiBmaWxsPSIjRkZEMTgwIiBvcGFjaXR5PSIwLjUiLz4KICA8Y2lyY2xlIGN4PSI0NTAiIGN5PSI4MCIgcj0iMjAiIGZpbGw9IiNGRkQxODAiIG9wYWNpdHk9IjAuNiIvPgo8L3N2Zz4=",
+      "sizes": "512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}

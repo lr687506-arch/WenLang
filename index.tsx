@@ -48,8 +48,9 @@ import {
 } from 'lucide-react';
 
 // --- SUPABASE CONFIG ---
-const supabaseUrl = 'https://efzdhiqdcakvmgxatvkx.supabase.co';
-const supabaseKey = 'sb_publishable_sFtNz9hTE1PwZY9Ahnc3lQ_FaGiop51';
+// Used import.meta.env for Vite environment variables
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://efzdhiqdcakvmgxatvkx.supabase.co';
+const supabaseKey = import.meta.env.VITE_SUPABASE_KEY || 'sb_publishable_sFtNz9hTE1PwZY9Ahnc3lQ_FaGiop51';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // --- APP ICON URL ---

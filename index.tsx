@@ -888,7 +888,32 @@ const App = () => {
         });
   };
 
-  const fetchProfileAndRedirect = async (session: any) => {
+  const createDefaultProfile = async (session: any) => {
+      // Emergency fallback profile for old users with missing data
+      const emailName = session.user.email?.split('@')[0] || 'User';
+      const defaultProfile: UserProfile = {
+          id: session.user.id,
+          username: emailName,
+          nativeLanguage: 'English',
+          targetLanguage: 'Japanese', // Default to JP as it has content
+          level: 'Beginner',
+          hobbies: ['Culture'],
+          emailNotifications: false,
+          reminderTime: '09:00'
+      };
+      
+      // Save locally so we don't ask again
+      localStorage.setItem(`profile_${session.user.id}`, JSON.stringify(defaultProfile));
+      
+      setUserProfile(defaultProfile);
+      setAppLanguage('English');
+      setView('home'); 
+
+      // Try background save to DB (Might fail if RLS issues, but user is unblocked)
+      await supabase.from('profiles').upsert(defaultProfile, { onConflict: 'id' });
+  };
+
+  const fetchProfileAndRedirect = async (session: any, isNewUserFlow: boolean = false) => {
       // 1. Check Local Storage First (Fast Fallback)
       const localProfile = localStorage.getItem(`profile_${session.user.id}`);
       if (localProfile) {
@@ -905,7 +930,7 @@ const App = () => {
       }
 
       // 2. Check Supabase
-      const { data, error } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
+      const { data } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
       
       if (data && data.username && data.targetLanguage) {
           setUserProfile(data);
@@ -918,8 +943,20 @@ const App = () => {
           setTempUsername(data.username);
           setView('onboarding');
       } else {
-          // No data found in DB (or RLS error) -> Setup
-          setView('username_setup');
+          // No profile found in DB.
+          
+          // CRITICAL FIX: If this is NOT a brand new user (created > 2 mins ago), 
+          // force a default profile to stop the infinite setup loop.
+          const isRecentlyCreated = new Date().getTime() - new Date(session.user.created_at).getTime() < 120000; // 2 minutes tolerance
+          
+          if (isNewUserFlow || isRecentlyCreated) {
+              // Truly new user -> Setup
+              setView('username_setup');
+          } else {
+              // Returning user with missing profile (DB error/Loss) -> FORCE HOME with defaults
+              console.log("Old user with missing profile - Auto-recovering...");
+              await createDefaultProfile(session);
+          }
       }
       setLoadingSession(false);
   };
@@ -928,7 +965,7 @@ const App = () => {
       const checkSession = async () => {
           const { data: { session } } = await supabase.auth.getSession();
           if (session) {
-              await fetchProfileAndRedirect(session);
+              await fetchProfileAndRedirect(session, false);
           } else {
               setView('auth');
               setLoadingSession(false);
@@ -941,7 +978,7 @@ const App = () => {
       setLoadingSession(true);
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
-          await fetchProfileAndRedirect(session);
+          await fetchProfileAndRedirect(session, isNewUser);
       } else {
           setLoadingSession(false);
       }
@@ -968,7 +1005,6 @@ const App = () => {
           
           if (error) {
               console.warn("DB Save warning (Username):", error.message);
-              // Do not block the user, just proceed to onboarding
           }
       }
       

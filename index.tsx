@@ -888,24 +888,51 @@ const App = () => {
         });
   };
 
+  const fetchProfileAndRedirect = async (session: any) => {
+      // 1. Check Local Storage First (Fast Fallback)
+      const localProfile = localStorage.getItem(`profile_${session.user.id}`);
+      if (localProfile) {
+          try {
+              const parsed = JSON.parse(localProfile);
+              if (parsed && parsed.targetLanguage) {
+                  setUserProfile(parsed);
+                  setAppLanguage(parsed.nativeLanguage);
+                  setView('home');
+                  setLoadingSession(false);
+                  return; // Exit early if local data is good
+              }
+          } catch(e) { console.error("Local storage parse error", e); }
+      }
+
+      // 2. Check Supabase
+      const { data, error } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
+      
+      if (data && data.username && data.targetLanguage) {
+          setUserProfile(data);
+          setAppLanguage(data.nativeLanguage);
+          setView('home');
+          // Sync local storage just in case
+          localStorage.setItem(`profile_${session.user.id}`, JSON.stringify(data));
+      } else if (data && data.username) {
+          // Partial data found in DB
+          setTempUsername(data.username);
+          setView('onboarding');
+      } else {
+          // No data found in DB (or RLS error) -> Setup
+          setView('username_setup');
+      }
+      setLoadingSession(false);
+  };
+
   useEffect(() => {
       const checkSession = async () => {
           const { data: { session } } = await supabase.auth.getSession();
           if (session) {
-              const { data } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
-              // Check if profile exists AND is complete (has a target language)
-              if (data && data.targetLanguage) {
-                  setUserProfile(data);
-                  setAppLanguage(data.nativeLanguage);
-                  setView('home');
-              } else {
-                  // If profile doesn't exist OR is incomplete, go to Username setup
-                  setView('username_setup');
-              }
+              await fetchProfileAndRedirect(session);
           } else {
               setView('auth');
+              setLoadingSession(false);
           }
-          setLoadingSession(false);
       };
       checkSession();
   }, []);
@@ -913,22 +940,11 @@ const App = () => {
   const handleAuthSuccess = async (isNewUser: boolean) => {
       setLoadingSession(true);
       const { data: { session } } = await supabase.auth.getSession();
-      
       if (session) {
-          // Instead of assuming "Returning User = Home", we check if they actually have a profile
-          const { data } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
-          
-          if (data && data.targetLanguage) {
-              // Full profile exists
-              setUserProfile(data);
-              setAppLanguage(data.nativeLanguage);
-              setView('home'); 
-          } else {
-              // No profile OR Incomplete profile -> Start Setup
-              setView('username_setup');
-          }
+          await fetchProfileAndRedirect(session);
+      } else {
+          setLoadingSession(false);
       }
-      setLoadingSession(false);
   };
 
   const handleLogout = async () => {
@@ -940,37 +956,58 @@ const App = () => {
     setLoadingSession(false);
   };
 
-  const handleUsernameSubmit = (username: string) => {
+  const handleUsernameSubmit = async (username: string) => {
+      setLoadingSession(true);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+          // SAVE TO DATABASE
+          const { error } = await supabase.from('profiles').upsert({
+              id: session.user.id,
+              username: username,
+          }, { onConflict: 'id' });
+          
+          if (error) {
+              console.warn("DB Save warning (Username):", error.message);
+              // Do not block the user, just proceed to onboarding
+          }
+      }
+      
       setTempUsername(username);
-      // DO NOT save to DB yet. Wait until full onboarding is complete.
-      // This prevents the issue where a partial profile makes the app think setup is done.
       setView('onboarding');
+      setLoadingSession(false);
   };
 
   const handleOnboardingComplete = async (profileData: UserProfile, lang: string) => {
+    setLoadingSession(true);
     const { data: { session } } = await supabase.auth.getSession();
     if (session) {
+        const finalUsername = tempUsername || userProfile?.username || profileData.username;
+        
         const newProfile = { 
             ...profileData, 
-            username: tempUsername, 
+            username: finalUsername, 
             id: session.user.id,
             emailNotifications: false, 
             reminderTime: '09:00'
         };
 
-        const { error } = await supabase.from('profiles').upsert(newProfile);
-        if (!error) {
-            setUserProfile(newProfile);
-            setAppLanguage(lang);
-            setView('home');
-        } else {
-            console.error('Error saving profile:', error);
-            // Fallback: Set local state anyway so user can continue
-            setUserProfile(newProfile);
-            setAppLanguage(lang);
-            setView('home');
+        // 1. Try Saving to Supabase
+        const { error } = await supabase.from('profiles').upsert(newProfile, { onConflict: 'id' });
+        
+        if (error) {
+            console.error('Supabase Save Error:', error);
+            // Alert user but continue with local storage
+            alert('Note: Database save failed (likely due to permissions). Progress saved locally.');
         }
+
+        // 2. Always Save to Local Storage as Backup
+        localStorage.setItem(`profile_${session.user.id}`, JSON.stringify(newProfile));
+
+        setUserProfile(newProfile);
+        setAppLanguage(lang);
+        setView('home');
     }
+    setLoadingSession(false);
   };
   
   const handlePublish = (newArticle: Article) => {

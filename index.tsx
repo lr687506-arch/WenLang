@@ -48,9 +48,20 @@ import {
 } from 'lucide-react';
 
 // --- SUPABASE CONFIG ---
-// Used import.meta.env for Vite environment variables
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://efzdhiqdcakvmgxatvkx.supabase.co';
-const supabaseKey = import.meta.env.VITE_SUPABASE_KEY || 'sb_publishable_sFtNz9hTE1PwZY9Ahnc3lQ_FaGiop51';
+// Safely access env vars. In some build environments, import.meta.env might be accessed differently or not fully shimmed if bypassing Vite.
+// We cast to any to avoid TS errors if types aren't perfect, and use optional chaining.
+const getEnv = (key: string) => {
+  try {
+    // @ts-ignore
+    return import.meta.env?.[key];
+  } catch (e) {
+    console.warn('Error accessing environment variable:', key);
+    return undefined;
+  }
+};
+
+const supabaseUrl = getEnv('VITE_SUPABASE_URL') || 'https://efzdhiqdcakvmgxatvkx.supabase.co';
+const supabaseKey = getEnv('VITE_SUPABASE_KEY') || 'sb_publishable_sFtNz9hTE1PwZY9Ahnc3lQ_FaGiop51';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // --- APP ICON URL ---

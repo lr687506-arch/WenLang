@@ -516,7 +516,7 @@ const LanguagePickerModal = ({unlockedSet, onClose, onSelect, t}: any) => {
 };
 
 // --- USERNAME SETUP ---
-const UsernameSetup = ({ onNext }: { onNext: (username: string) => void }) => {
+const UsernameSetup = ({ onNext, onLogout }: { onNext: (username: string) => void, onLogout: () => void }) => {
     const [username, setUsername] = useState('');
     return (
         <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-white dark:bg-[#0f1115]">
@@ -527,13 +527,19 @@ const UsernameSetup = ({ onNext }: { onNext: (username: string) => void }) => {
                      <input value={username} onChange={e => setUsername(e.target.value)} className="w-full p-4 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:border-brand outline-none text-slate-900 dark:text-white text-lg font-bold" placeholder="e.g. Polyglot123" autoFocus />
                 </div>
                 <Button fullWidth onClick={() => onNext(username)} disabled={!username.trim()}>Continue</Button>
+                
+                <div className="text-center pt-4">
+                    <button onClick={onLogout} className="text-sm text-slate-500 hover:text-red-500 transition-colors flex items-center gap-1 mx-auto">
+                        <LogOut size={14} /> Logout (Change Account)
+                    </button>
+                </div>
             </div>
         </div>
     );
 };
 
 // --- ONBOARDING COMPONENT ---
-const Onboarding = ({ onComplete }: { onComplete: (profileData: UserProfile, lang: string) => void }) => {
+const Onboarding = ({ onComplete, onLogout }: { onComplete: (profileData: UserProfile, lang: string) => void, onLogout: () => void }) => {
     const [step, setStep] = useState(0);
     const [nativeLang, setNativeLang] = useState('');
     const [targetLang, setTargetLang] = useState('');
@@ -559,9 +565,15 @@ const Onboarding = ({ onComplete }: { onComplete: (profileData: UserProfile, lan
     };
 
     return (
-        <div className="min-h-screen bg-white dark:bg-[#0f1115] p-6 flex flex-col animate-fade-in">
+        <div className="min-h-screen bg-white dark:bg-[#0f1115] p-6 flex flex-col animate-fade-in relative">
+             <div className="absolute top-4 right-4">
+                 <button onClick={onLogout} className="p-2 text-slate-400 hover:text-red-500 transition-colors" title="Logout">
+                     <LogOut size={20} />
+                 </button>
+             </div>
+             
              {/* Progress Bar */}
-             <div className="w-full h-2 bg-slate-100 dark:bg-slate-800 rounded-full mb-8">
+             <div className="w-full h-2 bg-slate-100 dark:bg-slate-800 rounded-full mb-8 mt-8">
                  <div className="h-full bg-brand rounded-full transition-all duration-300" style={{ width: `${((step + 1) / 4) * 100}%` }} />
              </div>
 
@@ -657,7 +669,7 @@ const Onboarding = ({ onComplete }: { onComplete: (profileData: UserProfile, lan
 };
 
 // --- SETTINGS VIEW ---
-const SettingsView = ({ profile, onClose, darkMode, setDarkMode, appLanguage, setAppLanguage }: any) => {
+const SettingsView = ({ profile, onClose, darkMode, setDarkMode, appLanguage, setAppLanguage, onLogout }: any) => {
     const [reminderTime, setReminderTime] = useState(profile?.reminderTime || '09:00');
     const [emailNotif, setEmailNotif] = useState(profile?.emailNotifications || false);
     const t = (k: string) => getTranslation(appLanguage, k);
@@ -741,7 +753,7 @@ const SettingsView = ({ profile, onClose, darkMode, setDarkMode, appLanguage, se
                      </div>
                  </div>
                  
-                 <Button variant="ghost" fullWidth onClick={async () => { await supabase.auth.signOut(); window.location.href = '/'; }} className="text-red-500 hover:bg-red-50 hover:text-red-600">{t('logout')}</Button>
+                 <Button variant="ghost" fullWidth onClick={onLogout} className="text-red-500 hover:bg-red-50 hover:text-red-600">{t('logout')}</Button>
             </div>
         </div>
     )
@@ -888,8 +900,6 @@ const App = () => {
                   setView('home');
               } else {
                   // If profile doesn't exist OR is incomplete, go to Username setup
-                  // If it's a partial profile (just username), we might want to skip to onboarding,
-                  // but simplest is to restart flow to ensure data integrity.
                   setView('username_setup');
               }
           } else {
@@ -919,6 +929,15 @@ const App = () => {
           }
       }
       setLoadingSession(false);
+  };
+
+  const handleLogout = async () => {
+    setLoadingSession(true);
+    await supabase.auth.signOut();
+    setUserProfile(null);
+    setTempUsername('');
+    setView('auth');
+    setLoadingSession(false);
   };
 
   const handleUsernameSubmit = (username: string) => {
@@ -984,8 +1003,8 @@ const App = () => {
   );
 
   if (view === 'auth') return <AuthView onAuthSuccess={handleAuthSuccess} />;
-  if (view === 'username_setup') return <UsernameSetup onNext={handleUsernameSubmit} />;
-  if (view === 'onboarding') return <Onboarding onComplete={handleOnboardingComplete} />;
+  if (view === 'username_setup') return <UsernameSetup onNext={handleUsernameSubmit} onLogout={handleLogout} />;
+  if (view === 'onboarding') return <Onboarding onComplete={handleOnboardingComplete} onLogout={handleLogout} />;
   
   if (view === 'quiz') return <QuizView language={selectedLangForQuiz} onClose={() => setView('home')} onPass={() => { const newUnlocked = new Set(unlockedLanguages); newUnlocked.add(selectedLangForQuiz); setUnlockedLanguages(newUnlocked); setView('home'); }} t={t} />;
   if (view === 'editor') return <EditorView language={selectedLangForEditor} onClose={() => setView('home')} onPublish={handlePublish} t={t} />;
@@ -999,6 +1018,7 @@ const App = () => {
         setDarkMode={setDarkMode}
         appLanguage={appLanguage}
         setAppLanguage={setAppLanguage}
+        onLogout={handleLogout}
     />
   );
 

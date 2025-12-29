@@ -44,7 +44,8 @@ import {
   Copy,
   Music,
   Mail,
-  Loader2
+  Loader2,
+  ChevronDown
 } from 'lucide-react';
 
 // --- SUPABASE CONFIG ---
@@ -222,13 +223,14 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
         'category': 'Category',
         'select_cat': 'Select Category',
         'select_level': 'Select Level',
-        'add_cover': 'Add Cover Image',
+        'add_cover': 'Add Cover Image (URL)',
         'add_audio': 'Add Audio Clip',
         'optional': '(Optional)',
         'start_writing': 'Start writing your story here...',
         'tap_highlight': 'Tap a word to select it, then tap a level color below to highlight it.',
         'clear': 'Clear',
-        'link_copied': 'Link copied to clipboard!'
+        'link_copied': 'Link copied to clipboard!',
+        'cancel': 'Cancel'
     },
     'Portuguese': {
         'username_q': 'Como devemos chamar você?',
@@ -283,13 +285,14 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
         'category': 'Categoria',
         'select_cat': 'Selecione a Categoria',
         'select_level': 'Selecione o Nível',
-        'add_cover': 'Adicionar Capa',
+        'add_cover': 'Adicionar Capa (URL)',
         'add_audio': 'Adicionar Áudio',
         'optional': '(Opcional)',
         'start_writing': 'Comece a escrever aqui...',
         'tap_highlight': 'Toque numa palavra para selecionar, depois escolha uma cor abaixo.',
         'clear': 'Limpar',
-        'link_copied': 'Link copiado!'
+        'link_copied': 'Link copiado!',
+        'cancel': 'Cancelar'
     },
 };
 
@@ -303,9 +306,46 @@ const QUIZ_DATA: Record<string, Question[]> = {
     'Japanese': [
         { type: 'Vocabulary', q: 'What is "Thank you" in Japanese?', options: ['Arigatou', 'Sayonara', 'Konnichiwa', 'Sumimasen'], correctString: 'Arigatou' },
         { type: 'Grammar', q: 'Which particle indicates the subject?', options: ['Wa (は)', 'Wo (を)', 'De (で)', 'Ni (に)'], correctString: 'Wa (は)' },
+        { type: 'Vocabulary', q: 'What does "Neko" mean?', options: ['Cat', 'Dog', 'Bird', 'Fish'], correctString: 'Cat' },
+        { type: 'Culture', q: 'What do you say before eating?', options: ['Itadakimasu', 'Gochisousama', 'Oishii', 'Kanpai'], correctString: 'Itadakimasu' },
+        { type: 'Kanji', q: 'What is the Kanji for "Japan"?', options: ['日本', '中国', '韓国', '米国'], correctString: '日本' },
+        { type: 'Grammar', q: 'Translate: "I eat sushi"', options: ['Sushi wo tabemasu', 'Sushi wo nomimasu', 'Sushi ga sukidesu', 'Sushi ni ikimasu'], correctString: 'Sushi wo tabemasu' },
+        { type: 'Vocabulary', q: 'What is "Morning" in Japanese?', options: ['Asa', 'Yoru', 'Hiru', 'Ban'], correctString: 'Asa' },
+        { type: 'Grammar', q: 'Which particle marks the destination?', options: ['Ni (に)', 'Wo (を)', 'Ga (が)', 'No (の)'], correctString: 'Ni (に)' },
+        { type: 'Vocabulary', q: 'Select the number 10', options: ['Juu', 'Go', 'Roku', 'Nana'], correctString: 'Juu' },
+        { type: 'Culture', q: 'What is a "Torii"?', options: ['Shrine Gate', 'Sushi type', 'Kimono style', 'Sword'], correctString: 'Shrine Gate' },
+        { type: 'Vocabulary', q: 'Meaning of "Sensei"', options: ['Teacher', 'Student', 'Doctor', 'Driver'], correctString: 'Teacher' },
+        { type: 'Grammar', q: 'Past tense of "Tabemasu" (to eat)', options: ['Tabemashita', 'Tabemasen', 'Tabetai', 'Tabete'], correctString: 'Tabemashita' },
+        { type: 'Kanji', q: 'Which is "Mountain"?', options: ['山', '川', '田', '日'], correctString: '山' },
+        { type: 'Vocabulary', q: 'What color is "Aka"?', options: ['Red', 'Blue', 'White', 'Black'], correctString: 'Red' },
+        { type: 'Culture', q: 'When is Cherry Blossom season?', options: ['Spring', 'Summer', 'Fall', 'Winter'], correctString: 'Spring' },
+        { type: 'Grammar', q: 'How to say "My book"?', options: ['Watashi no hon', 'Watashi wa hon', 'Watashi ni hon', 'Watashi to hon'], correctString: 'Watashi no hon' },
+        { type: 'Vocabulary', q: 'Opposite of "Takai" (Expensive/High)', options: ['Yasui', 'Oishii', 'Hayai', 'Samui'], correctString: 'Yasui' },
+        { type: 'Kanji', q: 'Meaning of "水"', options: ['Water', 'Fire', 'Tree', 'Gold'], correctString: 'Water' },
+        { type: 'Grammar', q: 'Which is correct for "I like dogs"?', options: ['Inu ga suki desu', 'Inu wo suki desu', 'Inu ni suki desu', 'Inu de suki desu'], correctString: 'Inu ga suki desu' },
+        { type: 'Vocabulary', q: 'What is "Sayonara"?', options: ['Goodbye', 'Hello', 'Good Morning', 'Good Night'], correctString: 'Goodbye' }
     ],
     'English': [
-         { type: 'Grammar', q: 'Select the correct verb: "She ___ to the store."', options: ['went', 'go', 'going', 'gone'], correctString: 'went' },
+        { type: 'Grammar', q: 'Select the correct verb: "She ___ to the store."', options: ['went', 'go', 'going', 'gone'], correctString: 'went' },
+        { type: 'Vocabulary', q: 'Opposite of "Happy"', options: ['Sad', 'Glad', 'Joyful', 'Excited'], correctString: 'Sad' },
+        { type: 'Grammar', q: 'Plural of "Child"', options: ['Children', 'Childs', 'Childrens', 'Kid'], correctString: 'Children' },
+        { type: 'Vocabulary', q: 'A place where books are kept', options: ['Library', 'Gym', 'Park', 'Mall'], correctString: 'Library' },
+        { type: 'Grammar', q: '"They ____ playing soccer."', options: ['are', 'is', 'am', 'be'], correctString: 'are' },
+        { type: 'Vocabulary', q: 'Synonym for "Big"', options: ['Large', 'Small', 'Tiny', 'Little'], correctString: 'Large' },
+        { type: 'Grammar', q: 'Past tense of "Eat"', options: ['Ate', 'Eated', 'Eating', 'Eats'], correctString: 'Ate' },
+        { type: 'Vocabulary', q: 'What is a "Car"?', options: ['Vehicle', 'Food', 'Animal', 'Plant'], correctString: 'Vehicle' },
+        { type: 'Grammar', q: '"I ____ a doctor."', options: ['am', 'is', 'are', 'be'], correctString: 'am' },
+        { type: 'Vocabulary', q: 'Seventh day of the week', options: ['Saturday', 'Sunday', 'Monday', 'Friday'], correctString: 'Saturday' },
+        { type: 'Grammar', q: 'Comparative of "Good"', options: ['Better', 'Gooder', 'Best', 'More Good'], correctString: 'Better' },
+        { type: 'Vocabulary', q: 'Frozen water is called...', options: ['Ice', 'Steam', 'Gas', 'Rain'], correctString: 'Ice' },
+        { type: 'Grammar', q: '"____ you like coffee?"', options: ['Do', 'Does', 'Are', 'Is'], correctString: 'Do' },
+        { type: 'Vocabulary', q: 'A baby dog is a...', options: ['Puppy', 'Kitten', 'Cub', 'Calf'], correctString: 'Puppy' },
+        { type: 'Grammar', q: '"He ____ not know."', options: ['does', 'do', 'is', 'are'], correctString: 'does' },
+        { type: 'Vocabulary', q: 'Color of the sky', options: ['Blue', 'Green', 'Red', 'Yellow'], correctString: 'Blue' },
+        { type: 'Grammar', q: '"This book is ____."', options: ['mine', 'my', 'me', 'I'], correctString: 'mine' },
+        { type: 'Vocabulary', q: 'Tool used to cut paper', options: ['Scissors', 'Hammer', 'Spoon', 'Pencil'], correctString: 'Scissors' },
+        { type: 'Grammar', q: 'Future tense indicator', options: ['Will', 'Did', 'Does', 'Has'], correctString: 'Will' },
+        { type: 'Vocabulary', q: 'Season after Winter', options: ['Spring', 'Summer', 'Autumn', 'Fall'], correctString: 'Spring' }
     ]
 };
 
@@ -341,13 +381,10 @@ const INITIAL_ARTICLES: Article[] = [
 
 const generateRealQuestions = (language: string) => {
   const baseQuestions = QUIZ_DATA[language] || QUIZ_DATA['English'];
-  const fullQuiz = [];
-  for(let i=0; i<10; i++) {
-      fullQuiz.push(...baseQuestions);
-  }
-  return fullQuiz.slice(0, 20).map((q, i) => ({
+  // Return all questions defined without looping
+  return baseQuestions.map((q, i) => ({
       ...q,
-      q: `${q.q} (${i + 1}/20)` 
+      q: `${q.q} (${i + 1}/${baseQuestions.length})` 
   }));
 };
 
@@ -498,19 +535,140 @@ const QuizView = ({ language, onClose, onPass, t }: any) => {
   const [score, setScore] = useState(0);
   const [finished, setFinished] = useState(false);
   const [questions, setQuestions] = useState<any[]>([]);
-  useEffect(() => { setQuestions(generateRealQuestions(language)); }, [language]);
+  
+  useEffect(() => { 
+      setQuestions(generateRealQuestions(language)); 
+  }, [language]);
+  
   const handleAnswer = (opt: string) => {
       if(opt === questions[currentQ].correctString) setScore(s=>s+1);
       if(currentQ < questions.length -1) setCurrentQ(q=>q+1); else setFinished(true);
   };
-  if(finished) return <div className="p-6 fixed inset-0 z-50 bg-white flex flex-col items-center justify-center"><h2 className="text-2xl font-bold mb-4">{score >= 18 ? 'Passed!' : 'Failed'}</h2><Button onClick={() => {if(score>=18) onPass(); onClose();}}>Close</Button></div>
+  
+  if(finished) return <div className="p-6 fixed inset-0 z-50 bg-white dark:bg-[#0f1115] flex flex-col items-center justify-center animate-fade-in"><h2 className="text-2xl font-bold mb-4 dark:text-white">{score >= 18 ? 'Passed!' : 'Failed'}</h2><p className="mb-4 dark:text-slate-300">Score: {score}/{questions.length}</p><Button onClick={() => {if(score>=18) onPass(); onClose();}}>Close</Button></div>
   if(questions.length === 0) return null;
-  return <div className="fixed inset-0 z-50 bg-white dark:bg-slate-900 p-6"><h3 className="text-xl mb-4">{questions[currentQ].q}</h3>{questions[currentQ].options.map((o:string)=><button key={o} onClick={()=>handleAnswer(o)} className="block w-full p-4 mb-2 border rounded">{o}</button>)}</div>;
+  
+  return (
+    <div className="fixed inset-0 z-50 bg-white dark:bg-[#0f1115] p-6 flex flex-col animate-slide-up">
+        <div className="flex justify-between items-center mb-8">
+            <h3 className="text-xl font-bold dark:text-white">Quiz: {language}</h3>
+            <button onClick={onClose}><X className="text-slate-500"/></button>
+        </div>
+        <div className="flex-1 flex flex-col justify-center">
+             <h3 className="text-2xl font-bold mb-8 text-center dark:text-white">{questions[currentQ].q}</h3>
+             <div className="space-y-3">
+                 {questions[currentQ].options.map((o:string)=>(
+                     <button key={o} onClick={()=>handleAnswer(o)} className="block w-full p-4 rounded-xl border-2 border-slate-200 dark:border-slate-700 hover:border-brand dark:hover:border-brand dark:text-white font-medium transition-colors">{o}</button>
+                 ))}
+             </div>
+        </div>
+        <div className="text-center text-slate-400 text-sm mt-8">Question {currentQ + 1} of {questions.length}</div>
+    </div>
+  );
 };
 
 const EditorView = ({language, onClose, onPublish, t}: any) => {
-    return <div className="fixed inset-0 z-50 bg-white dark:bg-slate-900 p-6"><button onClick={onClose}><X/></button>Editor for {language}</div>
+    const [title, setTitle] = useState('');
+    const [subtitle, setSubtitle] = useState('');
+    const [content, setContent] = useState('');
+    const [image, setImage] = useState('');
+    const [level, setLevel] = useState('N5');
+    const [category, setCategory] = useState('Culture');
+
+    const handlePublish = () => {
+        if(!title || !content) return;
+        const newArticle: Article = {
+            id: `usr-${Date.now()}`,
+            title,
+            subtitle,
+            content,
+            imageUrl: image || 'https://images.unsplash.com/photo-1543002588-bfa74002ed7e?q=80&w=2000&auto=format&fit=crop',
+            author: 'You',
+            authorAvatar: `https://ui-avatars.com/api/?name=You&background=FF8C00&color=fff`,
+            timeAgo: 'Just now',
+            level,
+            tags: [category],
+            languageCode: language === 'Japanese' ? 'ja-JP' : 'en-US',
+            languageName: language
+        };
+        onPublish(newArticle);
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 bg-white dark:bg-[#0f1115] flex flex-col animate-slide-up overflow-y-auto">
+            <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between sticky top-0 bg-white/90 dark:bg-[#0f1115]/90 backdrop-blur-md">
+                <button onClick={onClose} className="text-slate-500 hover:text-slate-800 dark:hover:text-white font-medium">{t('cancel')}</button>
+                <div className="font-bold dark:text-white">{t('new_story')}</div>
+                <button onClick={handlePublish} disabled={!title || !content} className="text-brand font-bold disabled:opacity-50">{t('publish')}</button>
+            </div>
+            
+            <div className="p-6 max-w-2xl mx-auto w-full space-y-6 pb-20">
+                <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-2">{t('title')}</label>
+                    <input 
+                        className="w-full text-2xl font-bold bg-transparent border-none outline-none placeholder:text-slate-300 dark:placeholder:text-slate-700 dark:text-white" 
+                        placeholder={t('enter_title')} 
+                        value={title} onChange={e => setTitle(e.target.value)}
+                        autoFocus
+                    />
+                </div>
+                
+                <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-2">{t('subtitle')}</label>
+                    <input 
+                        className="w-full text-lg bg-transparent border-none outline-none placeholder:text-slate-300 dark:placeholder:text-slate-700 dark:text-white" 
+                        placeholder={t('short_desc')} 
+                        value={subtitle} onChange={e => setSubtitle(e.target.value)}
+                    />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                     <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-2">{t('category')}</label>
+                        <select 
+                            value={category} onChange={e => setCategory(e.target.value)}
+                            className="w-full p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 dark:text-white outline-none"
+                        >
+                            <option>Culture</option><option>Science</option><option>Life</option><option>Tech</option>
+                        </select>
+                     </div>
+                     <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-2">{t('level_label')}</label>
+                        <select 
+                            value={level} onChange={e => setLevel(e.target.value)}
+                            className="w-full p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 dark:text-white outline-none"
+                        >
+                            <option>N5</option><option>N4</option><option>N3</option><option>N2</option><option>N1</option>
+                            <option>A1</option><option>A2</option><option>B1</option><option>B2</option><option>C1</option>
+                        </select>
+                     </div>
+                </div>
+
+                <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-2">{t('add_cover')}</label>
+                    <div className="flex gap-2">
+                        <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl text-slate-400"><ImageIcon size={20}/></div>
+                        <input 
+                            className="flex-1 p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none dark:text-white" 
+                            placeholder="https://..."
+                            value={image} onChange={e => setImage(e.target.value)}
+                        />
+                    </div>
+                </div>
+
+                <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-2">{t('write_content')}</label>
+                    <textarea 
+                        className="w-full h-64 p-4 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none resize-none dark:text-white leading-relaxed" 
+                        placeholder={t('start_writing')}
+                        value={content} onChange={e => setContent(e.target.value)}
+                    />
+                </div>
+            </div>
+        </div>
+    );
 };
+
 const LanguagePickerModal = ({unlockedSet, onClose, onSelect, t}: any) => {
     return <div className="fixed inset-0 z-50 bg-black/50 p-6 flex items-center justify-center"><div className="bg-white p-6 rounded-2xl w-full max-w-sm"><h3 className="font-bold mb-4">{t('choose_lang')}</h3>{LANGUAGES.map(l=><button key={l.name} onClick={()=>onSelect(l.name, !unlockedSet.has(l.name))} className="block w-full p-3 mb-2 border rounded">{l.flag} {l.name}</button>)}<button onClick={onClose} className="mt-4 text-red-500">Close</button></div></div>
 };
@@ -703,6 +861,23 @@ const SettingsView = ({ profile, onClose, darkMode, setDarkMode, appLanguage, se
             }
         }
     };
+    
+    const handleShare = async () => {
+        if (navigator.share) {
+            try {
+                await navigator.share({
+                    title: 'WenLang',
+                    text: 'Check out WenLang, the best language learning app!',
+                    url: window.location.href,
+                });
+            } catch (err) {
+                console.log('Error sharing:', err);
+            }
+        } else {
+            navigator.clipboard.writeText(window.location.href);
+            alert(t('link_copied'));
+        }
+    };
 
     return (
         <div className="min-h-screen bg-slate-50 dark:bg-[#0f1115] animate-slide-up">
@@ -712,6 +887,7 @@ const SettingsView = ({ profile, onClose, darkMode, setDarkMode, appLanguage, se
             </div>
             <div className="p-6 space-y-6 max-w-md mx-auto">
                  <div className="bg-white dark:bg-slate-800 rounded-2xl overflow-hidden">
+                     {/* Dark Mode */}
                      <div className="p-4 flex items-center justify-between border-b border-slate-100 dark:border-slate-700">
                          <div className="flex items-center gap-3">
                              <div className="p-2 bg-slate-100 dark:bg-slate-700 rounded-lg"><Moon size={20} className="text-slate-600 dark:text-slate-300"/></div>
@@ -720,6 +896,25 @@ const SettingsView = ({ profile, onClose, darkMode, setDarkMode, appLanguage, se
                          <button onClick={() => setDarkMode(!darkMode)} className={`w-12 h-7 rounded-full transition-colors relative ${darkMode ? 'bg-brand' : 'bg-slate-200'}`}>
                              <div className={`w-5 h-5 bg-white rounded-full absolute top-1 transition-all ${darkMode ? 'left-6' : 'left-1'}`} />
                          </button>
+                     </div>
+                     
+                     {/* App Language */}
+                     <div className="p-4 flex items-center justify-between">
+                         <div className="flex items-center gap-3">
+                             <div className="p-2 bg-slate-100 dark:bg-slate-700 rounded-lg"><Globe size={20} className="text-slate-600 dark:text-slate-300"/></div>
+                             <span className="font-medium dark:text-white">{t('app_lang')}</span>
+                         </div>
+                         <div className="relative">
+                            <select 
+                                value={appLanguage} 
+                                onChange={(e) => setAppLanguage(e.target.value)}
+                                className="bg-transparent font-bold text-brand outline-none appearance-none pr-6 text-right cursor-pointer"
+                            >
+                                <option value="English">English</option>
+                                <option value="Portuguese">Português</option>
+                            </select>
+                            <ChevronDown size={14} className="absolute right-0 top-1.5 text-brand pointer-events-none"/>
+                         </div>
                      </div>
                  </div>
 
@@ -751,6 +946,17 @@ const SettingsView = ({ profile, onClose, darkMode, setDarkMode, appLanguage, se
                              <div className={`w-5 h-5 bg-white rounded-full absolute top-1 transition-all ${emailNotif ? 'left-6' : 'left-1'}`} />
                          </button>
                      </div>
+                 </div>
+                 
+                 {/* Share Button */}
+                 <div className="bg-white dark:bg-slate-800 rounded-2xl overflow-hidden">
+                    <button onClick={handleShare} className="w-full p-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors text-left">
+                         <div className="flex items-center gap-3">
+                             <div className="p-2 bg-slate-100 dark:bg-slate-700 rounded-lg"><Share2 size={20} className="text-slate-600 dark:text-slate-300"/></div>
+                             <span className="font-medium dark:text-white">{t('share')}</span>
+                         </div>
+                         <ArrowRight size={16} className="text-slate-400" />
+                    </button>
                  </div>
                  
                  <Button variant="ghost" fullWidth onClick={onLogout} className="text-red-500 hover:bg-red-50 hover:text-red-600">{t('logout')}</Button>

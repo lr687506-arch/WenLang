@@ -1,7 +1,48 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim() || '';
-const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim() || '';
+/**
+ * Normalizes a Supabase project URL so accidental service subpaths
+ * (e.g. "/rest/v1/", "/auth/v1/", "/storage/v1/") or trailing slashes
+ * are stripped down to the project base origin expected by @supabase/supabase-js.
+ */
+export function normalizeSupabaseUrl(rawUrl: string | undefined): string {
+  const cleaned = (rawUrl || '').trim().replace(/^["']|["']$/g, '');
+  if (!cleaned) return '';
+
+  try {
+    const parsed = new URL(cleaned);
+
+    // Handle accidental Supabase dashboard URLs: https://supabase.com/dashboard/project/<ref>
+    if (
+      (parsed.hostname === 'supabase.com' || parsed.hostname === 'app.supabase.com') &&
+      /\/project\/([a-z0-9]+)/i.test(parsed.pathname)
+    ) {
+      const match = parsed.pathname.match(/\/project\/([a-z0-9]+)/i);
+      if (match?.[1]) {
+        return `https://${match[1]}.supabase.co`;
+      }
+    }
+
+    // Standard Supabase hosted domains always use the bare origin
+    if (/\.(supabase\.co|supabase\.in|supabase\.net)$/i.test(parsed.hostname)) {
+      return parsed.origin;
+    }
+
+    // Self-hosted / custom domains: strip accidental service suffixes and trailing slashes
+    const strippedPath = parsed.pathname
+      .replace(/\/(rest|auth|storage|realtime|functions|graphql)\/v1\/?.*$/i, '')
+      .replace(/\/+$/, '');
+
+    return `${parsed.origin}${strippedPath}`;
+  } catch {
+    return cleaned.replace(/\/+$/, '');
+  }
+}
+
+const supabaseUrl = normalizeSupabaseUrl(import.meta.env.VITE_SUPABASE_URL as string | undefined);
+const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)
+  ?.trim()
+  .replace(/^["']|["']$/g, '') || '';
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 

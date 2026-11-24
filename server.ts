@@ -44,9 +44,35 @@ function checkRateLimit(key: string): boolean {
   return true;
 }
 
+function normalizeSupabaseUrl(rawUrl: string | undefined): string {
+  const cleaned = (rawUrl || '').trim().replace(/^["']|["']$/g, '');
+  if (!cleaned) return '';
+  try {
+    const parsed = new URL(cleaned);
+    if (
+      (parsed.hostname === 'supabase.com' || parsed.hostname === 'app.supabase.com') &&
+      /\/project\/([a-z0-9]+)/i.test(parsed.pathname)
+    ) {
+      const match = parsed.pathname.match(/\/project\/([a-z0-9]+)/i);
+      if (match?.[1]) return `https://${match[1]}.supabase.co`;
+    }
+    if (/\.(supabase\.co|supabase\.in|supabase\.net)$/i.test(parsed.hostname)) {
+      return parsed.origin;
+    }
+    const strippedPath = parsed.pathname
+      .replace(/\/(rest|auth|storage|realtime|functions|graphql)\/v1\/?.*$/i, '')
+      .replace(/\/+$/, '');
+    return `${parsed.origin}${strippedPath}`;
+  } catch {
+    return cleaned.replace(/\/+$/, '');
+  }
+}
+
 function getSupabaseServerVerifier() {
-  const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-  const anonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+  const url = normalizeSupabaseUrl(process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL);
+  const anonKey = (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '')
+    .trim()
+    .replace(/^["']|["']$/g, '');
   if (!url || !anonKey) {
     return null;
   }

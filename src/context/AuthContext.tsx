@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import type { Profile } from '../types/database';
 import { supabase, isSupabaseConfigured, isSchemaMissingError } from '../services/supabaseClient';
@@ -17,6 +17,20 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+const REQUEST_TIMEOUT_MS = 10_000;
+
+function withTimeout<T>(promise: PromiseLike<T>, ms: number, timeoutMessage: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(timeoutMessage)), ms);
+    }),
+  ]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
 
 function buildFallbackUsername(user: User): string {
   const fromMeta =
@@ -44,125 +58,176 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [authReady, setAuthReady] = useState(!isSupabaseConfigured);
+  const [profileResolvedForUserId, setProfileResolvedForUserId] = useState<string | null>(null);
   const [schemaMissing, setSchemaMissing] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
 
+  const fetchSeqRef = useRef(0);
+
   const fetchOrProvisionProfile = useCallback(async (authUser: User): Promise<Profile | null> => {
+    const seq = ++fetchSeqRef.current;
     setProfileError(null);
 
-    // 1. Lookup existing row in global public.profiles by authenticated user id
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', authUser.id)
-      .maybeSingle();
+    try {
+      // 1. Lookup existing row in global public.profiles by authenticated user id
+      const { data, error } = await withTimeout(
+        supabase.from('profiles').select('*').eq('id', authUser.id).maybeSingle(),
+        REQUEST_TIMEOUT_MS,
+        'Tempo limite excedido ao conectar com o banco de dados Supabase.'
+      );
 
-    if (error) {
-      if (isSchemaMissingError(error)) {
-        setSchemaMissing(true);
-      } else {
-        setSchemaMissing(false);
-        setProfileError(error.message);
+      if (fetchSeqRef.current !== seq) return null;
+
+      if (error) {
+        if (isSchemaMissingError(error)) {
+          setSchemaMissing(true);
+        } else {
+          setSchemaMissing(false);
+          setProfileError(error.message);
+        }
+        return null;
       }
-      return null;
-    }
 
-    setSchemaMissing(false);
+      setSchemaMissing(false);
 
-    if (data) {
-      const normalized = normalizeProfileRow(data as Profile);
-      setProfile(normalized);
-      return normalized;
-    }
-
-    // 2. If trigger hasn't created the profile yet (e.g. legacy account), safely upsert with ignoreDuplicates
-    const insertPayload = {
-      id: authUser.id,
-      username: buildFallbackUsername(authUser),
-      full_name:
-        typeof authUser.user_metadata?.full_name === 'string'
-          ? authUser.user_metadata.full_name.trim() || null
-          : null,
-      native_language: 'PT-BR',
-      target_languages: [] as string[],
-      onboarding_completed: false,
-      xp_points: 0,
-    };
-
-    const { error: upsertError } = await supabase
-      .from('profiles')
-      .upsert(insertPayload, { onConflict: 'id', ignoreDuplicates: true });
-
-    if (upsertError) {
-      if (isSchemaMissingError(upsertError)) {
-        setSchemaMissing(true);
-      } else {
-        setProfileError(upsertError.message);
+      if (data) {
+        const normalized = normalizeProfileRow(data as Profile);
+        setProfile(normalized);
+        return normalized;
       }
-      return null;
-    }
 
-    // 3. Read back the canonical row
-    const { data: provisioned, error: refetchError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', authUser.id)
-      .single();
+      // 2. If trigger hasn't created the profile yet, safely upsert with ignoreDuplicates
+      const insertPayload = {
+        id: authUser.id,
+        username: buildFallbackUsername(authUser),
+        full_name:
+          typeof authUser.user_metadata?.full_name === 'string'
+            ? authUser.user_metadata.full_name.trim() || null
+            : null,
+        native_language: 'PT-BR',
+        target_languages: [] as string[],
+        onboarding_completed: false,
+        xp_points: 0,
+      };
 
-    if (refetchError || !provisioned) {
-      if (isSchemaMissingError(refetchError)) {
-        setSchemaMissing(true);
-      } else {
-        setProfileError(refetchError?.message || 'Não foi possível carregar o perfil do usuário.');
+      const { error: upsertError } = await withTimeout(
+        supabase.from('profiles').upsert(insertPayload, {
+          onConflict: 'id',
+          ignoreDuplicates: true,
+        }),
+        REQUEST_TIMEOUT_MS,
+        'Tempo limite excedido ao inicializar seu perfil.'
+      );
+
+      if (fetchSeqRef.current !== seq) return null;
+
+      if (upsertError) {
+        if (isSchemaMissingError(upsertError)) {
+          setSchemaMissing(true);
+        } else {
+          setProfileError(upsertError.message);
+        }
+        return null;
       }
-      return null;
-    }
 
-    const normalizedCreated = normalizeProfileRow(provisioned as Profile);
-    setProfile(normalizedCreated);
-    return normalizedCreated;
+      // 3. Read back the canonical row
+      const { data: provisioned, error: refetchError } = await withTimeout(
+        supabase.from('profiles').select('*').eq('id', authUser.id).single(),
+        REQUEST_TIMEOUT_MS,
+        'Tempo limite excedido ao carregar seu perfil.'
+      );
+
+      if (fetchSeqRef.current !== seq) return null;
+
+      if (refetchError || !provisioned) {
+        if (isSchemaMissingError(refetchError)) {
+          setSchemaMissing(true);
+        } else {
+          setProfileError(
+            refetchError?.message || 'Não foi possível carregar o perfil do usuário.'
+          );
+        }
+        return null;
+      }
+
+      const normalizedCreated = normalizeProfileRow(provisioned as Profile);
+      setProfile(normalizedCreated);
+      return normalizedCreated;
+    } catch (err) {
+      if (fetchSeqRef.current !== seq) return null;
+      setProfileError(
+        err instanceof Error ? err.message : 'Erro inesperado ao carregar seu perfil.'
+      );
+      return null;
+    } finally {
+      if (fetchSeqRef.current === seq) {
+        setProfileResolvedForUserId(authUser.id);
+      }
+    }
   }, []);
 
+  // Effect 1: Auth session initialization & listener.
+  // CRITICAL: Keep onAuthStateChange 100% synchronous (never await Supabase queries inside it)
+  // to avoid the @supabase/supabase-js v2 navigator.locks deadlock.
   useEffect(() => {
     let active = true;
 
     if (!isSupabaseConfigured) {
-      setLoading(false);
+      setAuthReady(true);
       return;
     }
 
-    supabase.auth.getSession().then(async ({ data }) => {
-      if (!active) return;
-      const currentSession = data.session ?? null;
-      setSession(currentSession);
-      setUser(currentSession?.user ?? null);
-      if (currentSession?.user) {
-        await fetchOrProvisionProfile(currentSession.user);
-      }
-      if (active) setLoading(false);
-    });
-
-    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, nextSession) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       if (!active) return;
       setSession(nextSession);
       setUser(nextSession?.user ?? null);
-      if (nextSession?.user) {
-        setLoading(true);
-        await fetchOrProvisionProfile(nextSession.user);
-      } else {
+      if (!nextSession?.user) {
         setProfile(null);
         setSchemaMissing(false);
         setProfileError(null);
+        setProfileResolvedForUserId(null);
       }
-      if (active) setLoading(false);
+      setAuthReady(true);
     });
+
+    withTimeout(
+      supabase.auth.getSession(),
+      REQUEST_TIMEOUT_MS,
+      'Tempo limite excedido ao verificar sua sessão.'
+    )
+      .then(({ data }) => {
+        if (!active) return;
+        const currentSession = data?.session ?? null;
+        setSession(currentSession);
+        setUser(currentSession?.user ?? null);
+      })
+      .catch(() => {
+        if (!active) return;
+        setSession(null);
+        setUser(null);
+      })
+      .finally(() => {
+        if (active) setAuthReady(true);
+      });
 
     return () => {
       active = false;
       listener.subscription.unsubscribe();
     };
-  }, [fetchOrProvisionProfile]);
+  }, []);
+
+  // Effect 2: Load or provision profile OUTSIDE the auth lock whenever the authenticated user changes.
+  useEffect(() => {
+    if (!authReady) return;
+    if (!user) {
+      setProfile(null);
+      setProfileResolvedForUserId(null);
+      return;
+    }
+
+    void fetchOrProvisionProfile(user);
+  }, [authReady, user?.id, fetchOrProvisionProfile]);
 
   const refreshProfile = useCallback(async () => {
     if (!user) return null;
@@ -205,13 +270,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const signOut = useCallback(async () => {
-    await supabase.auth.signOut();
+    await supabase.auth.signOut().catch(() => {});
     setProfile(null);
     setSession(null);
     setUser(null);
     setSchemaMissing(false);
     setProfileError(null);
+    setProfileResolvedForUserId(null);
   }, []);
+
+  const loading = !authReady || (Boolean(user) && profileResolvedForUserId !== user?.id);
 
   return (
     <AuthContext.Provider

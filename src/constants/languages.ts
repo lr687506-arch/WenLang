@@ -119,17 +119,17 @@ export const CURATED_EDITORIAL_COVERS = [
   {
     id: 'kyoto',
     label: 'Mesa em Quioto',
-    url: '/src/assets/images/cover_kyoto_library_1795550593936.jpg',
+    url: '/covers/kyoto.jpg',
   },
   {
     id: 'shanghai',
     label: 'Estúdio de Caligrafia',
-    url: '/src/assets/images/cover_shanghai_study_1795550582896.jpg',
+    url: '/covers/shanghai.jpg',
   },
   {
     id: 'editorial',
     label: 'Leitura e Áudio',
-    url: '/src/assets/images/cover_editorial_books_1795550586355.jpg',
+    url: '/covers/editorial.jpg',
   },
 ];
 

@@ -68,7 +68,8 @@ export function isSafeMediaUrl(url: string | null | undefined): boolean {
   if (
     trimmed.startsWith('/src/assets/') ||
     trimmed.startsWith('/assets/') ||
-    trimmed.startsWith('/heroes/')
+    trimmed.startsWith('/heroes/') ||
+    trimmed.startsWith('/covers/')
   ) {
     return true;
   }

@@ -441,7 +441,7 @@ export function FeedPage({
         <div className="my-6 bg-white dark:bg-[#131926] border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden grid grid-cols-1 md:grid-cols-12 items-stretch">
           <div className="md:col-span-5 relative min-h-[200px] bg-slate-200 dark:bg-slate-800">
             <img
-              src="/src/assets/images/cover_editorial_books_1795550586355.jpg"
+              src="/covers/editorial.jpg"
               alt="Livros multilíngues e fones de ouvido"
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover"

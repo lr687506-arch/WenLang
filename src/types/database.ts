@@ -22,6 +22,9 @@ export interface TextItem {
   author_id: string;
   title: string;
   content: string;
+  translated_title?: string | null;
+  translated_content?: string | null;
+  translation_language?: string | null;
   language: string;
   difficulty_level: string;
   cover_image_url: string | null;
@@ -32,7 +35,7 @@ export interface TextItem {
   // Relational joins
   author?: Pick<Profile, 'id' | 'username' | 'full_name' | 'avatar_url'> | null;
   exams?: Array<{ id: string; title: string }>;
-  author_annotations?: Array<{ id: string }>;
+  author_annotations?: Array<{ id: string; term_or_phrase?: string }>;
 }
 
 export interface AuthorAnnotation {
@@ -41,6 +44,7 @@ export interface AuthorAnnotation {
   term_or_phrase: string;
   start_index: number | null;
   end_index: number | null;
+  difficulty_level?: string | null;
   explanation: string;
   pronunciation: string | null;
   created_at: string;

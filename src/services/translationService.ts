@@ -6,6 +6,7 @@ export interface LookupResult {
   source: 'author' | 'deepl';
   originalText: string;
   translatedText: string;
+  difficultyLevel?: string | null;
   pronunciation?: string | null;
   contextSentence?: string;
   detectedSourceLanguage?: string | null;
@@ -152,6 +153,7 @@ export async function resolveTermMeaning(params: {
       source: 'author',
       originalText: localMatch.term_or_phrase,
       translatedText: localMatch.explanation,
+      difficultyLevel: localMatch.difficulty_level || null,
       pronunciation: localMatch.pronunciation,
       contextSentence,
       annotationId: localMatch.id,

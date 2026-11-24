@@ -1,9 +1,17 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { supabase, isSafeMediaUrl } from '../services/supabaseClient';
 import { resolveTermMeaning, type LookupResult } from '../services/translationService';
+import {
+  splitAnnotationsAndMetadata,
+  type FullTranslationMeta,
+} from '../services/textMetadataCodec';
 import { useAuth } from '../context/AuthContext';
 import type { TextItem, AuthorAnnotation, Exam, AuthorSummary, ReadingStatus } from '../types/database';
-import { getLanguageLabel } from '../constants/languages';
+import {
+  getLanguageLabel,
+  getLevelColorMeta,
+  parseDifficultyLevels,
+} from '../constants/languages';
 import type { ThemeMode } from '../hooks/useTheme';
 import {
   ArrowLeft,
@@ -191,6 +199,7 @@ export function ReadingView({
   const [textItem, setTextItem] = useState<TextItem | null>(null);
   const [authorSummary, setAuthorSummary] = useState<AuthorSummary | null>(null);
   const [annotations, setAnnotations] = useState<AuthorAnnotation[]>([]);
+  const [fallbackTranslation, setFallbackTranslation] = useState<FullTranslationMeta | null>(null);
   const [exam, setExam] = useState<Exam | null>(null);
   const [readingStatus, setReadingStatus] = useState<ReadingStatus>('reading');
   const [updatingProgress, setUpdatingProgress] = useState(false);
@@ -201,6 +210,7 @@ export function ReadingView({
   // Typography preferences
   const [fontSizeIdx, setFontSizeIdx] = useState(1);
   const [useSerifBody, setUseSerifBody] = useState(true);
+  const [showFullTranslation, setShowFullTranslation] = useState(false);
 
   // Audio player state
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -221,6 +231,8 @@ export function ReadingView({
     setError(null);
     setPopover(null);
     setAuthorSummary(null);
+    setFallbackTranslation(null);
+    setShowFullTranslation(false);
 
     Promise.all([
       supabase.from('texts').select('*').eq('id', textId).single(),
@@ -253,8 +265,11 @@ export function ReadingView({
       }
 
       const rawText = textRes.data as unknown as TextItem;
+      const { visibleAnnotations, fallbackTranslation: parsedFallback } =
+        splitAnnotationsAndMetadata((annRes.data || []) as AuthorAnnotation[]);
       setTextItem(rawText);
-      setAnnotations((annRes.data || []) as AuthorAnnotation[]);
+      setAnnotations(visibleAnnotations);
+      setFallbackTranslation(parsedFallback);
       setExam((examRes.data as Exam | null) || null);
 
       const existingStatus = (progressRes.data as { status?: ReadingStatus } | null)?.status;
@@ -622,6 +637,18 @@ export function ReadingView({
   const audioSafe = isSafeMediaUrl(textItem.audio_url);
   const coverSafe = isSafeMediaUrl(textItem.cover_image_url);
   const isOwner = Boolean(user && textItem.author_id === user.id);
+  const parsedTextLevels = parseDifficultyLevels(textItem.difficulty_level);
+  const primaryTextLevel = parsedTextLevels[0] || textItem.difficulty_level || 'A1';
+  const fullTranslationTitle =
+    textItem.translated_title?.trim() || fallbackTranslation?.title || '';
+  const fullTranslationText =
+    textItem.translated_content?.trim() || fallbackTranslation?.content || '';
+  const fullTranslationLanguage =
+    textItem.translation_language?.trim() || fallbackTranslation?.language || null;
+  const hasFullTranslation = fullTranslationTitle.length > 0 || fullTranslationText.length > 0;
+  const translationParagraphs = fullTranslationText
+    ? fullTranslationText.split(/\n+/).filter((line) => line.trim().length > 0)
+    : [];
 
   return (
     <div className="pb-28 md:pb-16">
@@ -679,6 +706,22 @@ export function ReadingView({
               {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
 
+            {hasFullTranslation && (
+              <button
+                type="button"
+                aria-pressed={showFullTranslation}
+                onClick={() => setShowFullTranslation((v) => !v)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap ${
+                  showFullTranslation
+                    ? 'bg-sky-50 dark:bg-sky-950/60 border-sky-300 dark:border-sky-700 text-sky-800 dark:text-sky-300'
+                    : 'bg-white dark:bg-[#131926] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:border-sky-500'
+                }`}
+              >
+                <Languages className="w-3.5 h-3.5" />
+                <span>{showFullTranslation ? 'Ocultar tradução' : 'Ver tradução'}</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={handleToggleCompleted}
@@ -711,13 +754,46 @@ export function ReadingView({
       <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-8 grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
         {/* Primary Reading Column */}
         <article className="lg:col-span-8">
+          {/* Suspended Difficulty Level Indicator (above title) */}
+          {parsedTextLevels.length > 0 && (
+            <div className="mb-3 flex items-center">
+              <div
+                aria-label={`Nível de dificuldade: ${parsedTextLevels.join('-')}`}
+                className="inline-flex flex-wrap items-center gap-1 px-2.5 py-1 rounded-xl bg-white dark:bg-[#131926] border border-slate-200/90 dark:border-slate-700/80 shadow-md -translate-y-0.5 text-xs font-bold tracking-wide"
+              >
+                {parsedTextLevels.map((lvl, idx) => {
+                  const lvlMeta = getLevelColorMeta(lvl);
+                  return (
+                    <React.Fragment key={`${lvl}-${idx}`}>
+                      {idx > 0 && (
+                        <span
+                          className="text-slate-400 dark:text-slate-500 font-semibold select-none"
+                          aria-hidden="true"
+                        >
+                          -
+                        </span>
+                      )}
+                      <span
+                        className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border ${lvlMeta.badge}`}
+                      >
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${lvlMeta.dot}`}
+                          aria-hidden="true"
+                        />
+                        <span>{lvl}</span>
+                      </span>
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Header Metadata */}
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
             <span className="font-semibold text-orange-700 dark:text-orange-400">
               {getLanguageLabel(textItem.language)}
             </span>
-            <span aria-hidden="true">·</span>
-            <span>{textItem.difficulty_level}</span>
             <span aria-hidden="true">·</span>
             <span>
               Por{' '}
@@ -736,7 +812,7 @@ export function ReadingView({
             )}
           </div>
 
-          <h1 className="mt-3 font-display text-3xl sm:text-4xl font-semibold text-slate-950 dark:text-slate-50 leading-tight">
+          <h1 className="mt-2.5 font-display text-3xl sm:text-4xl font-semibold text-slate-950 dark:text-slate-50 leading-tight">
             {textItem.title}
           </h1>
 
@@ -841,7 +917,61 @@ export function ReadingView({
               </span>{' '}
               para notas do autor, ou selecione qualquer palavra/frase para traduzir com DeepL.
             </span>
+            {hasFullTranslation && (
+              <button
+                type="button"
+                onClick={() => setShowFullTranslation((v) => !v)}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-sky-700 dark:text-sky-400 hover:underline shrink-0"
+              >
+                <Languages className="w-3.5 h-3.5" />
+                <span>{showFullTranslation ? 'Ocultar tradução' : 'Ver tradução'}</span>
+              </button>
+            )}
           </div>
+
+          {/* Author's Complete Text Translation Panel */}
+          {hasFullTranslation && showFullTranslation && (
+            <section
+              aria-label="Tradução completa do autor"
+              className="mt-5 p-5 sm:p-6 rounded-2xl bg-sky-50/70 dark:bg-sky-950/25 border border-sky-200/90 dark:border-sky-900/70"
+            >
+              <div className="flex items-center justify-between gap-2 pb-3 mb-4 border-b border-sky-200/70 dark:border-sky-900/60">
+                <div className="inline-flex items-center gap-2 text-xs font-semibold text-sky-800 dark:text-sky-300">
+                  <Languages className="w-4 h-4" />
+                  <span>
+                    Tradução completa do autor
+                    {fullTranslationLanguage
+                      ? ` · ${getLanguageLabel(fullTranslationLanguage)}`
+                      : ''}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowFullTranslation(false)}
+                  aria-label="Fechar tradução completa"
+                  className="p-1 rounded-md text-sky-700/70 dark:text-sky-300/70 hover:text-sky-950 dark:hover:text-white hover:bg-sky-100 dark:hover:bg-sky-900/50 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              {fullTranslationTitle && (
+                <h3 className="mb-3 font-display text-xl sm:text-2xl font-semibold text-slate-950 dark:text-slate-50 leading-snug">
+                  {fullTranslationTitle}
+                </h3>
+              )}
+              {translationParagraphs.length > 0 && (
+                <div
+                  className={`space-y-4 text-slate-800 dark:text-slate-100 ${
+                    FONT_SIZES[fontSizeIdx].className
+                  } ${useSerifBody ? 'font-display tracking-[0.005em]' : 'font-sans'}`}
+                >
+                  {translationParagraphs.map((para, idx) => (
+                    <p key={idx}>{para}</p>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
 
           {/* Interactive Reading Canvas */}
           <div
@@ -865,12 +995,15 @@ export function ReadingView({
                 >
                   {p.segments.map((seg, sIdx) => {
                     if (seg.annotation) {
+                      const annLevelMeta = getLevelColorMeta(
+                        seg.annotation.difficulty_level || primaryTextLevel
+                      );
                       return (
                         <button
                           key={`${p.index}-${sIdx}`}
                           type="button"
                           onClick={(e) => handleAnnotationClick(e, seg)}
-                          className="inline font-inherit text-inherit underline decoration-dotted decoration-2 underline-offset-4 decoration-emerald-600 dark:decoration-emerald-400 hover:bg-emerald-500/15 dark:hover:bg-emerald-400/15 rounded-xs px-0.5 -mx-0.5 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600"
+                          className={`inline font-inherit text-inherit underline decoration-dotted decoration-2 underline-offset-4 rounded-xs px-0.5 -mx-0.5 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 ${annLevelMeta.underline}`}
                         >
                           {seg.text}
                         </button>
@@ -973,23 +1106,42 @@ export function ReadingView({
               </p>
             ) : (
               <ul className="mt-3 divide-y divide-slate-100 dark:divide-slate-800/80 max-h-[60vh] overflow-y-auto pr-1">
-                {annotations.map((ann) => (
-                  <li key={ann.id} className="py-3 first:pt-1 last:pb-0">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-                        {ann.term_or_phrase}
-                      </span>
-                      {ann.pronunciation && (
-                        <span className="text-xs font-mono text-emerald-700 dark:text-emerald-400 shrink-0">
-                          {ann.pronunciation}
-                        </span>
-                      )}
-                    </div>
-                    <p className="mt-1 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                      {ann.explanation}
-                    </p>
-                  </li>
-                ))}
+                {annotations.map((ann) => {
+                  const annLevel = ann.difficulty_level || primaryTextLevel;
+                  const annMeta = getLevelColorMeta(annLevel);
+                  return (
+                    <li key={ann.id} className="py-3 first:pt-1 last:pb-0">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                          <span
+                            className={`text-sm font-semibold text-slate-900 dark:text-slate-50 underline decoration-dotted decoration-2 underline-offset-4 ${annMeta.underline}`}
+                          >
+                            {ann.term_or_phrase}
+                          </span>
+                          {ann.difficulty_level && (
+                            <span
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[10px] font-semibold ${annMeta.badge}`}
+                            >
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full ${annMeta.dot}`}
+                                aria-hidden="true"
+                              />
+                              {ann.difficulty_level}
+                            </span>
+                          )}
+                        </div>
+                        {ann.pronunciation && (
+                          <span className="text-xs font-mono text-emerald-700 dark:text-emerald-400 shrink-0">
+                            {ann.pronunciation}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                        {ann.explanation}
+                      </p>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
@@ -1013,12 +1165,28 @@ export function ReadingView({
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               {popover.result ? (
-                <div className="flex items-center gap-1.5 text-xs font-semibold mb-1">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-semibold mb-1">
                   {popover.result.source === 'author' ? (
-                    <span className="inline-flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
-                      <BookMarked className="w-3.5 h-3.5" />
-                      <span>Nota do Autor</span>
-                    </span>
+                    <>
+                      <span className="inline-flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
+                        <BookMarked className="w-3.5 h-3.5" />
+                        <span>Nota do Autor</span>
+                      </span>
+                      {popover.result.difficultyLevel && (() => {
+                        const popLvlMeta = getLevelColorMeta(popover.result.difficultyLevel);
+                        return (
+                          <span
+                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[10px] font-semibold ${popLvlMeta.badge}`}
+                          >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full ${popLvlMeta.dot}`}
+                              aria-hidden="true"
+                            />
+                            {popover.result.difficultyLevel}
+                          </span>
+                        );
+                      })()}
+                    </>
                   ) : (
                     <span className="inline-flex items-center gap-1.5 text-sky-700 dark:text-sky-400">
                       <Languages className="w-3.5 h-3.5" />

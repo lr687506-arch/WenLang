@@ -5,11 +5,21 @@ import {
   uploadCoverFile,
   isSafeMediaUrl,
 } from '../services/supabaseClient';
+import {
+  FULL_TRANSLATION_SENTINEL,
+  ANNOTATION_LEVELS_SENTINEL,
+  encodeFullTranslationMeta,
+  encodeAnnotationLevelsMap,
+} from '../services/textMetadataCodec';
 import { useAuth } from '../context/AuthContext';
 import {
   NATIVE_LANGUAGE_OPTIONS,
   CURATED_EDITORIAL_COVERS,
   normalizeLanguageCode,
+  getLevelsForLanguage,
+  getLevelColorMeta,
+  formatDifficultyLevels,
+  getLanguageLabel,
 } from '../constants/languages';
 import {
   Upload,
@@ -23,6 +33,7 @@ import {
   AlertCircle,
   Check,
   Sparkles,
+  Languages,
 } from 'lucide-react';
 
 interface PublishPageProps {
@@ -36,6 +47,7 @@ interface DraftAnnotation {
   term_or_phrase: string;
   start_index: number | null;
   end_index: number | null;
+  difficulty_level: string;
   explanation: string;
   pronunciation: string;
 }
@@ -56,10 +68,15 @@ export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishP
   const defaultLang = normalizeLanguageCode(
     initialLanguage || profile?.target_languages?.[0] || 'ES'
   );
+  const initialLevelConfig = getLevelsForLanguage(defaultLang);
   const [title, setTitle] = useState('');
   const [language, setLanguage] = useState(defaultLang);
-  const [difficultyLevel, setDifficultyLevel] = useState('Iniciante');
+  const [selectedLevels, setSelectedLevels] = useState<string[]>([
+    initialLevelConfig.levels[0],
+  ]);
   const [content, setContent] = useState('');
+  const [translatedTitle, setTranslatedTitle] = useState('');
+  const [translatedContent, setTranslatedContent] = useState('');
   const [isPublic, setIsPublic] = useState(true);
 
   // Cover media
@@ -76,6 +93,9 @@ export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishP
   const [termDraft, setTermDraft] = useState('');
   const [startIdxDraft, setStartIdxDraft] = useState<number | null>(null);
   const [endIdxDraft, setEndIdxDraft] = useState<number | null>(null);
+  const [annotationLevelDraft, setAnnotationLevelDraft] = useState(
+    initialLevelConfig.levels[0]
+  );
   const [pronunciationDraft, setPronunciationDraft] = useState('');
   const [explanationDraft, setExplanationDraft] = useState('');
 
@@ -96,12 +116,25 @@ export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishP
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const currentLangMeta = NATIVE_LANGUAGE_OPTIONS.find((l) => l.sourceCode === language);
-  const levelPresets = currentLangMeta?.suggestedLevels || [
-    'Iniciante',
-    'Intermediário',
-    'Avançado',
-  ];
+  const levelConfig = getLevelsForLanguage(language);
+  const formattedDifficulty = formatDifficultyLevels(selectedLevels, language);
+
+  const handleLanguageChange = (nextLang: string) => {
+    setLanguage(nextLang);
+    const nextConfig = getLevelsForLanguage(nextLang);
+    setSelectedLevels([nextConfig.levels[0]]);
+    setAnnotationLevelDraft(nextConfig.levels[0]);
+  };
+
+  const handleToggleTextLevel = (lvl: string) => {
+    setSelectedLevels((prev) => {
+      if (prev.includes(lvl)) {
+        if (prev.length === 1) return prev;
+        return prev.filter((item) => item !== lvl);
+      }
+      return [...prev, lvl];
+    });
+  };
 
   const handleCaptureSelection = () => {
     const el = contentRef.current;
@@ -143,6 +176,9 @@ export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishP
       }
     }
 
+    const chosenLevel =
+      annotationLevelDraft || selectedLevels[0] || levelConfig.levels[0];
+
     setAnnotations((prev) => [
       ...prev,
       {
@@ -150,6 +186,7 @@ export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishP
         term_or_phrase: trimmedTerm,
         start_index: resolvedStart,
         end_index: resolvedEnd,
+        difficulty_level: chosenLevel,
         explanation: trimmedExplanation,
         pronunciation: pronunciationDraft.trim(),
       },
@@ -255,40 +292,183 @@ export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishP
       }
 
       setStatusMessage('Salvando texto no banco de dados...');
-      const { data: createdText, error: textErr } = await supabase
-        .from('texts')
-        .insert({
-          author_id: user.id,
-          title: title.trim(),
-          content: content.trim(),
-          language: normalizeLanguageCode(language),
-          difficulty_level: difficultyLevel.trim() || 'Iniciante',
-          cover_image_url: finalCoverUrl,
-          audio_url: finalAudioUrl,
-          is_public: isPublic,
-        })
-        .select('id')
-        .single();
+      const trimmedTranslatedTitle = translatedTitle.trim();
+      const trimmedTranslatedContent = translatedContent.trim();
+      const hasFullTranslation = Boolean(trimmedTranslatedTitle || trimmedTranslatedContent);
+      const translationLang = profile?.native_language || 'PT-BR';
 
-      if (textErr || !createdText) {
-        throw new Error(textErr?.message || 'Falha ao salvar texto.');
+      const coreTextPayload = {
+        author_id: user.id,
+        title: title.trim(),
+        content: content.trim(),
+        language: normalizeLanguageCode(language),
+        difficulty_level: formattedDifficulty,
+        cover_image_url: finalCoverUrl,
+        audio_url: finalAudioUrl,
+        is_public: isPublic,
+      };
+
+      const isMissingColumnErr = (err: { code?: string; message?: string } | null) =>
+        Boolean(
+          err &&
+            (err.code === '42703' ||
+              err.code === 'PGRST204' ||
+              /could not find.*column|column .* does not exist/i.test(err.message || ''))
+        );
+
+      let createdText: { id: string } | null = null;
+      let storedTranslationInFallback = false;
+
+      if (hasFullTranslation) {
+        // Attempt 1: save directly into native Supabase translation columns
+        const fullPayload: Record<string, unknown> = {
+          ...coreTextPayload,
+          ...(trimmedTranslatedTitle ? { translated_title: trimmedTranslatedTitle } : {}),
+          ...(trimmedTranslatedContent ? { translated_content: trimmedTranslatedContent } : {}),
+          translation_language: translationLang,
+        };
+
+        const firstTry = await supabase
+          .from('texts')
+          .insert(fullPayload)
+          .select('id')
+          .single();
+
+        if (!firstTry.error && firstTry.data) {
+          createdText = firstTry.data as { id: string };
+        } else if (isMissingColumnErr(firstTry.error)) {
+          // Attempt 2: retry omitting translation_language in case only title/content columns exist
+          const msg = firstTry.error?.message || '';
+          const onlyMissingLang =
+            /translation_language/i.test(msg) &&
+            !/translated_title|translated_content/i.test(msg);
+
+          if (onlyMissingLang) {
+            const noLangPayload: Record<string, unknown> = {
+              ...coreTextPayload,
+              ...(trimmedTranslatedTitle ? { translated_title: trimmedTranslatedTitle } : {}),
+              ...(trimmedTranslatedContent ? { translated_content: trimmedTranslatedContent } : {}),
+            };
+            const secondTry = await supabase
+              .from('texts')
+              .insert(noLangPayload)
+              .select('id')
+              .single();
+
+            if (!secondTry.error && secondTry.data) {
+              createdText = secondTry.data as { id: string };
+            } else if (!isMissingColumnErr(secondTry.error)) {
+              throw new Error(secondTry.error?.message || 'Falha ao salvar texto.');
+            }
+          }
+
+          // Attempt 3: insert core text columns and persist full translation in fallback metadata
+          if (!createdText) {
+            const coreTry = await supabase
+              .from('texts')
+              .insert(coreTextPayload)
+              .select('id')
+              .single();
+
+            if (coreTry.error || !coreTry.data) {
+              throw new Error(coreTry.error?.message || 'Falha ao salvar texto.');
+            }
+            createdText = coreTry.data as { id: string };
+            storedTranslationInFallback = true;
+          }
+        } else {
+          throw new Error(firstTry.error?.message || 'Falha ao salvar texto.');
+        }
+      } else {
+        const coreTry = await supabase
+          .from('texts')
+          .insert(coreTextPayload)
+          .select('id')
+          .single();
+
+        if (coreTry.error || !coreTry.data) {
+          throw new Error(coreTry.error?.message || 'Falha ao salvar texto.');
+        }
+        createdText = coreTry.data as { id: string };
       }
 
-      const newTextId = createdText.id as string;
+      const newTextId = createdText.id;
+
+      // Persist full translation via fallback metadata row if native columns were not present yet
+      if (storedTranslationInFallback && hasFullTranslation) {
+        setStatusMessage('Salvando tradução completa do autor...');
+        const { error: fallbackTransErr } = await supabase.from('author_annotations').insert({
+          text_id: newTextId,
+          term_or_phrase: FULL_TRANSLATION_SENTINEL,
+          start_index: null,
+          end_index: null,
+          pronunciation: translationLang,
+          explanation: encodeFullTranslationMeta({
+            title: trimmedTranslatedTitle,
+            content: trimmedTranslatedContent,
+            language: translationLang,
+          }),
+        });
+        if (fallbackTransErr) {
+          throw new Error(
+            `Texto salvo, mas houve erro ao salvar tradução completa: ${fallbackTransErr.message}`
+          );
+        }
+      }
 
       if (annotations.length > 0) {
         setStatusMessage('Gravando notas prévias do autor...');
-        const { error: annErr } = await supabase.from('author_annotations').insert(
-          annotations.map((a) => ({
-            text_id: newTextId,
-            term_or_phrase: a.term_or_phrase,
-            start_index: a.start_index,
-            end_index: a.end_index,
-            explanation: a.explanation,
-            pronunciation: a.pronunciation || null,
-          }))
-        );
-        if (annErr) throw new Error(`Texto salvo, mas houve erro nas anotações: ${annErr.message}`);
+        const fullAnnotationsPayload = annotations.map((a) => ({
+          text_id: newTextId,
+          term_or_phrase: a.term_or_phrase,
+          start_index: a.start_index,
+          end_index: a.end_index,
+          difficulty_level: a.difficulty_level || null,
+          explanation: a.explanation,
+          pronunciation: a.pronunciation || null,
+        }));
+
+        const { error: annErr } = await supabase
+          .from('author_annotations')
+          .insert(fullAnnotationsPayload);
+
+        if (annErr) {
+          if (isMissingColumnErr(annErr)) {
+            const legacyPayload = annotations.map((a) => ({
+              text_id: newTextId,
+              term_or_phrase: a.term_or_phrase,
+              start_index: a.start_index,
+              end_index: a.end_index,
+              explanation: a.explanation,
+              pronunciation: a.pronunciation || null,
+            }));
+
+            const encodedLevels = encodeAnnotationLevelsMap(annotations);
+            if (encodedLevels !== '{}') {
+              legacyPayload.push({
+                text_id: newTextId,
+                term_or_phrase: ANNOTATION_LEVELS_SENTINEL,
+                start_index: null,
+                end_index: null,
+                explanation: encodedLevels,
+                pronunciation: null,
+              });
+            }
+
+            const { error: legacyErr } = await supabase
+              .from('author_annotations')
+              .insert(legacyPayload);
+            if (legacyErr) {
+              throw new Error(
+                `Texto salvo, mas houve erro nas anotações: ${legacyErr.message}`
+              );
+            }
+          } else {
+            throw new Error(
+              `Texto salvo, mas houve erro nas anotações: ${annErr.message}`
+            );
+          }
+        }
       }
 
       if (includeExam && validQuestions.length > 0) {
@@ -379,7 +559,7 @@ export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishP
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label
                 htmlFor="pub-language"
@@ -390,7 +570,7 @@ export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishP
               <select
                 id="pub-language"
                 value={language}
-                onChange={(e) => setLanguage(e.target.value)}
+                onChange={(e) => handleLanguageChange(e.target.value)}
                 className="w-full px-3.5 py-2.5 rounded-lg bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-orange-600"
               >
                 {NATIVE_LANGUAGE_OPTIONS.map((lang) => (
@@ -399,29 +579,6 @@ export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishP
                   </option>
                 ))}
               </select>
-            </div>
-
-            <div>
-              <label
-                htmlFor="pub-level"
-                className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5"
-              >
-                Nível de dificuldade *
-              </label>
-              <input
-                id="pub-level"
-                type="text"
-                list="level-presets"
-                value={difficultyLevel}
-                onChange={(e) => setDifficultyLevel(e.target.value)}
-                placeholder="Ex: N4, HSK 3, Iniciante"
-                className="w-full px-3.5 py-2.5 rounded-lg bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-orange-600"
-              />
-              <datalist id="level-presets">
-                {levelPresets.map((lvl) => (
-                  <option key={lvl} value={lvl} />
-                ))}
-              </datalist>
             </div>
 
             <div>
@@ -453,6 +610,56 @@ export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishP
                 </button>
               </div>
             </div>
+          </div>
+
+          {/* Color-coded multi-select difficulty level bar */}
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+              <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Nível de dificuldade ({levelConfig.system}) *
+              </span>
+              <span className="text-xs text-slate-500 dark:text-slate-400">
+                Exibição no texto:{' '}
+                <strong className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                  {formattedDifficulty}
+                </strong>
+              </span>
+            </div>
+
+            <div
+              id="pub-level"
+              role="group"
+              aria-label={`Selecionar níveis de dificuldade (${levelConfig.system})`}
+              className="flex flex-wrap items-center gap-2 p-2 rounded-xl bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-700"
+            >
+              {levelConfig.levels.map((lvl) => {
+                const isSelected = selectedLevels.includes(lvl);
+                const colorMeta = getLevelColorMeta(lvl);
+                return (
+                  <button
+                    key={lvl}
+                    type="button"
+                    aria-pressed={isSelected}
+                    onClick={() => handleToggleTextLevel(lvl)}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
+                      isSelected ? colorMeta.barActive : colorMeta.barInactive
+                    }`}
+                  >
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        isSelected ? 'bg-white dark:bg-slate-950' : colorMeta.dot
+                      }`}
+                      aria-hidden="true"
+                    />
+                    <span>{lvl}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+              Você pode selecionar um ou mais níveis (ex: {levelConfig.levels[0]}-
+              {levelConfig.levels[1] || levelConfig.levels[0]}).
+            </p>
           </div>
 
           {/* Text Content */}
@@ -583,13 +790,66 @@ export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishP
           </div>
         </section>
 
-        {/* SECTION 2: AUTHOR ANNOTATIONS */}
+        {/* SECTION 2: FULL TEXT TRANSLATION (AUTHOR NATIVE LANGUAGE) */}
+        <section className="bg-white dark:bg-[#131926] border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-8 space-y-4">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <div>
+              <h2 className="font-display text-xl font-semibold text-slate-900 dark:text-slate-50 flex items-center gap-2">
+                <Languages className="w-5 h-5 text-sky-600 dark:text-sky-400" />
+                <span>02. Tradução completa do texto (opcional)</span>
+              </h2>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                Insira a tradução completa do texto no seu idioma base (
+                <strong className="font-semibold text-slate-700 dark:text-slate-200">
+                  {getLanguageLabel(profile?.native_language || 'PT-BR')}
+                </strong>
+                ). O leitor poderá ativar a opção “Ver tradução” durante a leitura.
+              </p>
+            </div>
+          </div>
+
+          <div>
+            <label
+              htmlFor="pub-translated-title"
+              className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5"
+            >
+              Título traduzido ({getLanguageLabel(profile?.native_language || 'PT-BR')})
+            </label>
+            <input
+              id="pub-translated-title"
+              type="text"
+              value={translatedTitle}
+              onChange={(e) => setTranslatedTitle(e.target.value)}
+              placeholder="Ex: Uma manhã de outono em Quioto"
+              className="w-full px-4 py-2.5 rounded-lg bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-700 text-base font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:border-sky-600"
+            />
+          </div>
+
+          <div>
+            <label
+              htmlFor="pub-translated-content"
+              className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5"
+            >
+              Texto traduzido ({getLanguageLabel(profile?.native_language || 'PT-BR')})
+            </label>
+            <textarea
+              id="pub-translated-content"
+              rows={7}
+              value={translatedContent}
+              onChange={(e) => setTranslatedContent(e.target.value)}
+              placeholder="Cole ou escreva aqui a tradução completa do texto principal, mantendo a divisão de parágrafos..."
+              className="w-full p-4 rounded-xl bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-700 text-sm sm:text-base text-slate-900 dark:text-slate-100 leading-relaxed focus:outline-none focus:border-sky-600"
+            />
+          </div>
+        </section>
+
+        {/* SECTION 3: AUTHOR ANNOTATIONS */}
         <section className="bg-white dark:bg-[#131926] border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-8 space-y-5">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <div>
               <h2 className="font-display text-xl font-semibold text-slate-900 dark:text-slate-50 flex items-center gap-2">
                 <BookMarked className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-                <span>02. Notas prévias do autor</span>
+                <span>03. Notas prévias do autor</span>
               </h2>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                 Palavras ou expressões cadastradas aqui são destacadas no texto e exibidas com
@@ -642,6 +902,42 @@ export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishP
           </div>
 
           <div>
+            <span className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+              Nível de dificuldade da palavra ({levelConfig.system})
+            </span>
+            <div
+              role="radiogroup"
+              aria-label="Nível de dificuldade da palavra"
+              className="flex flex-wrap items-center gap-1.5 p-1.5 rounded-lg bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-700"
+            >
+              {levelConfig.levels.map((lvl) => {
+                const isActive = annotationLevelDraft === lvl;
+                const colorMeta = getLevelColorMeta(lvl);
+                return (
+                  <button
+                    key={lvl}
+                    type="button"
+                    role="radio"
+                    aria-checked={isActive}
+                    onClick={() => setAnnotationLevelDraft(lvl)}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md border text-[11px] font-semibold transition-all cursor-pointer ${
+                      isActive ? colorMeta.barActive : colorMeta.barInactive
+                    }`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        isActive ? 'bg-white dark:bg-slate-950' : colorMeta.dot
+                      }`}
+                      aria-hidden="true"
+                    />
+                    <span>{lvl}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
             <label
               htmlFor="ann-exp"
               className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
@@ -671,51 +967,65 @@ export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishP
 
           {annotations.length > 0 && (
             <ul className="divide-y divide-slate-100 dark:divide-slate-800 border-t border-slate-100 dark:border-slate-800 pt-2">
-              {annotations.map((ann) => (
-                <li key={ann.id} className="py-3 flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-baseline gap-2">
-                      <span className="text-sm font-semibold text-slate-900 dark:text-white">
-                        {ann.term_or_phrase}
-                      </span>
-                      {ann.pronunciation && (
-                        <span className="text-xs font-mono text-emerald-700 dark:text-emerald-400">
-                          {ann.pronunciation}
+              {annotations.map((ann) => {
+                const levelMeta = getLevelColorMeta(ann.difficulty_level);
+                return (
+                  <li key={ann.id} className="py-3 flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`text-sm font-semibold text-slate-900 dark:text-white underline decoration-dotted decoration-2 underline-offset-4 ${levelMeta.underline}`}
+                        >
+                          {ann.term_or_phrase}
                         </span>
-                      )}
-                      {ann.start_index !== null && (
-                        <span className="text-[11px] font-mono text-slate-400 tabular-nums">
-                          [{ann.start_index}:{ann.end_index}]
+                        <span
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11px] font-semibold ${levelMeta.badge}`}
+                        >
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full ${levelMeta.dot}`}
+                            aria-hidden="true"
+                          />
+                          {ann.difficulty_level}
                         </span>
-                      )}
+                        {ann.pronunciation && (
+                          <span className="text-xs font-mono text-emerald-700 dark:text-emerald-400">
+                            {ann.pronunciation}
+                          </span>
+                        )}
+                        {ann.start_index !== null && (
+                          <span className="text-[11px] font-mono text-slate-400 tabular-nums">
+                            [{ann.start_index}:{ann.end_index}]
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                        {ann.explanation}
+                      </p>
                     </div>
-                    <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-300">
-                      {ann.explanation}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setAnnotations((prev) => prev.filter((item) => item.id !== ann.id))
-                    }
-                    aria-label={`Remover anotação ${ann.term_or_phrase}`}
-                    className="p-1.5 text-slate-400 hover:text-red-600 transition-colors shrink-0"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </li>
-              ))}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAnnotations((prev) => prev.filter((item) => item.id !== ann.id))
+                      }
+                      aria-label={`Remover anotação ${ann.term_or_phrase}`}
+                      className="p-1.5 text-slate-400 hover:text-red-600 transition-colors shrink-0"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>
 
-        {/* SECTION 3: COMPREHENSION EXAM BUILDER */}
+        {/* SECTION 4: COMPREHENSION EXAM BUILDER */}
         <section className="bg-white dark:bg-[#131926] border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-8 space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <h2 className="font-display text-xl font-semibold text-slate-900 dark:text-slate-50 flex items-center gap-2">
                 <ClipboardCheck className="w-5 h-5 text-orange-600 dark:text-orange-400" />
-                <span>03. Exame de compreensão (opcional)</span>
+                <span>04. Exame de compreensão (opcional)</span>
               </h2>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                 Crie perguntas de múltipla escolha para o leitor praticar e somar pontos de XP.

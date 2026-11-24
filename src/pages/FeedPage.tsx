@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { supabase, isSafeMediaUrl, isSchemaMissingError } from '../services/supabaseClient';
+import { isInternalAnnotationTerm } from '../services/textMetadataCodec';
 import { useAuth } from '../context/AuthContext';
 import type { TextItem, AuthorSummary, ReadingStatus } from '../types/database';
 import {
@@ -9,6 +10,7 @@ import {
   getLanguageNativeName,
   normalizeLanguageCode,
   normalizeTargetLanguages,
+  parseDifficultyLevels,
 } from '../constants/languages';
 import { SchemaSetupBanner } from '../components/SchemaSetupBanner';
 import type { ThemeMode } from '../hooks/useTheme';
@@ -122,7 +124,7 @@ export function FeedPage({
         is_public,
         created_at,
         exams(id, title),
-        author_annotations(id)
+        author_annotations(id, term_or_phrase)
       `
       )
       .eq('language', canonicalLang)
@@ -142,7 +144,9 @@ export function FeedPage({
       ...item,
       language: normalizeLanguageCode(item.language),
       exams: Array.isArray(item.exams) ? item.exams : [],
-      author_annotations: Array.isArray(item.author_annotations) ? item.author_annotations : [],
+      author_annotations: Array.isArray(item.author_annotations)
+        ? item.author_annotations.filter((a) => !isInternalAnnotationTerm(a.term_or_phrase))
+        : [],
     }));
 
     setTexts(normalized);
@@ -214,11 +218,15 @@ export function FeedPage({
   const filteredTexts = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return texts.filter((item) => {
-      if (
-        selectedLevel !== 'ALL' &&
-        item.difficulty_level.toLowerCase() !== selectedLevel.toLowerCase()
-      ) {
-        return false;
+      if (selectedLevel !== 'ALL') {
+        const targetLvl = selectedLevel.toLowerCase();
+        const rawMatch = item.difficulty_level.toLowerCase() === targetLvl;
+        const parsedMatch = parseDifficultyLevels(item.difficulty_level).some(
+          (lvl) => lvl.toLowerCase() === targetLvl
+        );
+        if (!rawMatch && !parsedMatch) {
+          return false;
+        }
       }
       if (onlyAudio && !item.audio_url) {
         return false;

@@ -139,6 +139,9 @@ CREATE TABLE IF NOT EXISTS public.texts (
   author_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   title text NOT NULL,
   content text NOT NULL,
+  translated_title text,
+  translated_content text,
+  translation_language text,
   language text NOT NULL,
   difficulty_level text NOT NULL DEFAULT 'Iniciante',
   cover_image_url text,
@@ -147,6 +150,10 @@ CREATE TABLE IF NOT EXISTS public.texts (
   is_public boolean NOT NULL DEFAULT true,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.texts ADD COLUMN IF NOT EXISTS translated_title text;
+ALTER TABLE public.texts ADD COLUMN IF NOT EXISTS translated_content text;
+ALTER TABLE public.texts ADD COLUMN IF NOT EXISTS translation_language text;
 
 CREATE INDEX IF NOT EXISTS idx_texts_author_id ON public.texts(author_id);
 CREATE INDEX IF NOT EXISTS idx_texts_language_public ON public.texts(language, is_public);
@@ -162,6 +169,7 @@ CREATE TABLE IF NOT EXISTS public.author_annotations (
   term_or_phrase text NOT NULL,
   start_index integer,
   end_index integer,
+  difficulty_level text,
   explanation text NOT NULL,
   pronunciation text,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -170,6 +178,8 @@ CREATE TABLE IF NOT EXISTS public.author_annotations (
     OR (start_index IS NOT NULL AND end_index IS NOT NULL AND start_index >= 0 AND end_index > start_index)
   )
 );
+
+ALTER TABLE public.author_annotations ADD COLUMN IF NOT EXISTS difficulty_level text;
 
 CREATE INDEX IF NOT EXISTS idx_author_annotations_text_id ON public.author_annotations(text_id);
 CREATE INDEX IF NOT EXISTS idx_author_annotations_term ON public.author_annotations(text_id, lower(term_or_phrase));

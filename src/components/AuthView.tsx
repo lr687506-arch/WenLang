@@ -17,7 +17,40 @@ interface AuthViewProps {
   onToggleTheme: () => void;
 }
 
+const WENLANG_ICON_SRC = '/assets/aistudio/WenLang_Icon_b1a6cb1a.jpeg';
+
+const HERO_SCENES = [
+  {
+    src: '/heroes/kyoto.jpg',
+    city: 'Quioto',
+    alt: 'Mesa de leitura literária iluminada em Quioto',
+  },
+  {
+    src: '/heroes/jakarta.jpg',
+    city: 'Jacarta',
+    alt: 'Mesa de leitura em uma varanda tranquila em Jacarta',
+  },
+  {
+    src: '/heroes/paris.jpg',
+    city: 'Paris',
+    alt: 'Mesa de leitura junto às janelas de um apartamento em Paris',
+  },
+  {
+    src: '/heroes/rio.jpg',
+    city: 'Rio de Janeiro',
+    alt: 'Mesa de leitura em uma varanda de Santa Teresa no Rio de Janeiro',
+  },
+  {
+    src: '/heroes/newyork.jpg',
+    city: 'Nova York',
+    alt: 'Mesa de leitura ao lado de uma janela em Nova York',
+  },
+] as const;
+
 export function AuthView({ theme, onToggleTheme }: AuthViewProps) {
+  const [heroScene] = useState(
+    () => HERO_SCENES[Math.floor(Math.random() * HERO_SCENES.length)]
+  );
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -112,9 +145,17 @@ export function AuthView({ theme, onToggleTheme }: AuthViewProps) {
     <div className="min-h-screen bg-[#F8FAFC] dark:bg-[#0B0F17] flex flex-col">
       {/* Minimal top strip */}
       <div className="max-w-6xl w-full mx-auto px-6 py-5 flex items-center justify-between">
-        <span className="font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50">
-          WenLang
-        </span>
+        <div className="inline-flex items-center gap-3 shrink-0">
+          <img
+            src={WENLANG_ICON_SRC}
+            alt="Ícone WenLang"
+            referrerPolicy="no-referrer"
+            className="w-9 h-9 rounded-xl object-cover shadow-xs"
+          />
+          <span className="font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50 whitespace-nowrap">
+            WenLang
+          </span>
+        </div>
         <button
           type="button"
           onClick={onToggleTheme}
@@ -197,18 +238,18 @@ export function AuthView({ theme, onToggleTheme }: AuthViewProps) {
       ) : (
         <main className="flex-1 max-w-6xl w-full mx-auto px-6 py-8 lg:py-12 grid grid-cols-1 lg:grid-cols-12 gap-10 items-stretch">
           {/* Editorial Left Column */}
-          <div className="lg:col-span-7 flex flex-col justify-between rounded-2xl overflow-hidden bg-white dark:bg-[#131926] border border-slate-200 dark:border-slate-800">
-            <div className="relative h-56 sm:h-72 lg:h-80 w-full overflow-hidden bg-slate-200 dark:bg-slate-800">
+          <div className="lg:col-span-7 flex flex-col rounded-2xl overflow-hidden bg-white dark:bg-[#131926] border border-slate-200 dark:border-slate-800">
+            <div className="relative flex-1 min-h-[260px] sm:min-h-[300px] lg:min-h-[340px] w-full overflow-hidden bg-slate-200 dark:bg-slate-800">
               <img
-                src="/src/assets/images/cover_kyoto_library_1795550593936.jpg"
-                alt="Mesa de leitura literária iluminada em Quioto"
+                src={heroScene.src}
+                alt={heroScene.alt}
                 referrerPolicy="no-referrer"
                 className="w-full h-full object-cover"
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-slate-950/75 via-slate-950/20 to-transparent" />
+              <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/25 to-transparent" />
               <div className="absolute bottom-6 left-6 right-6 text-white">
                 <p className="text-xs font-medium tracking-wide text-orange-200">
-                  Web · Android · Sincronização Supabase
+                  Web · Android · Sincronização Supabase · {heroScene.city}
                 </p>
                 <h1 className="mt-1.5 font-display text-2xl sm:text-3xl font-semibold leading-tight">
                   Leitura imersiva com notas do autor e tradução contextual

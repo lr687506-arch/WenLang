@@ -24,7 +24,11 @@ export const supabase: SupabaseClient = createClient(
 export function isSafeMediaUrl(url: string | null | undefined): boolean {
   if (!url) return false;
   const trimmed = url.trim();
-  if (trimmed.startsWith('/src/assets/') || trimmed.startsWith('/assets/')) {
+  if (
+    trimmed.startsWith('/src/assets/') ||
+    trimmed.startsWith('/assets/') ||
+    trimmed.startsWith('/heroes/')
+  ) {
     return true;
   }
   try {

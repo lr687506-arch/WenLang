@@ -58,9 +58,17 @@ export function OnboardingView() {
     <div className="min-h-screen bg-[#F8FAFC] dark:bg-[#0B0F17] py-10 px-4 sm:px-6">
       <div className="max-w-3xl mx-auto">
         <div className="flex items-center justify-between mb-8">
-          <span className="font-display text-2xl font-bold text-slate-900 dark:text-slate-50">
-            WenLang
-          </span>
+          <div className="inline-flex items-center gap-3 shrink-0">
+            <img
+              src="/assets/aistudio/WenLang_Icon_b1a6cb1a.jpeg"
+              alt="Ícone WenLang"
+              referrerPolicy="no-referrer"
+              className="w-9 h-9 rounded-xl object-cover shadow-xs"
+            />
+            <span className="font-display text-2xl font-bold text-slate-900 dark:text-slate-50 whitespace-nowrap">
+              WenLang
+            </span>
+          </div>
           <button
             type="button"
             onClick={() => signOut()}

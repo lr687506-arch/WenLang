@@ -24,13 +24,19 @@ export function Navbar({ currentRoute, onNavigate, isAuthenticated }: NavbarProp
       {/* Desktop & Mobile Top Header — Strict 3-Zone Contract */}
       <header className="sticky top-0 z-30 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-[#0B0F17]/95 backdrop-blur-md">
         <div className="max-w-6xl mx-auto h-16 px-4 sm:px-6 flex items-center justify-between gap-8">
-          {/* Zone 1: Single-line Wordmark */}
+          {/* Zone 1: Brand mark + single-line Wordmark */}
           <button
             type="button"
             onClick={() => onNavigate('feed')}
-            className="font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50 hover:text-orange-600 dark:hover:text-orange-400 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-600 rounded"
+            className="inline-flex items-center gap-2.5 font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50 hover:text-orange-600 dark:hover:text-orange-400 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-600 rounded"
           >
-            WenLang
+            <img
+              src="/assets/aistudio/WenLang_Icon_b1a6cb1a.jpeg"
+              alt="Ícone WenLang"
+              referrerPolicy="no-referrer"
+              className="w-8 h-8 rounded-lg object-cover shrink-0"
+            />
+            <span>WenLang</span>
           </button>
 
           {/* Zone 2: 4 Clean Single-Line Text Navigation Links */}

@@ -82,6 +82,23 @@ export interface UserExamAttempt {
   } | null;
 }
 
+export interface AuthorSummary {
+  id: string;
+  username: string;
+  full_name: string | null;
+  avatar_url: string | null;
+}
+
+export type ReadingStatus = 'reading' | 'completed';
+
+export interface UserReadingProgress {
+  id: string;
+  user_id: string;
+  text_id: string;
+  status: ReadingStatus;
+  last_read_at: string;
+}
+
 export interface SavedVocabulary {
   id: string;
   user_id: string;

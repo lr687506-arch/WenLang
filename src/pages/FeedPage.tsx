@@ -1,12 +1,14 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { supabase, isSafeMediaUrl, isSchemaMissingError } from '../services/supabaseClient';
 import { useAuth } from '../context/AuthContext';
-import type { TextItem } from '../types/database';
+import type { TextItem, AuthorSummary, ReadingStatus } from '../types/database';
 import {
   NATIVE_LANGUAGE_OPTIONS,
   COMMON_DIFFICULTY_LEVELS,
   getLanguageLabel,
   getLanguageNativeName,
+  normalizeLanguageCode,
+  normalizeTargetLanguages,
 } from '../constants/languages';
 import { SchemaSetupBanner } from '../components/SchemaSetupBanner';
 import type { ThemeMode } from '../hooks/useTheme';
@@ -21,11 +23,14 @@ import {
   Loader2,
   AlertCircle,
   SlidersHorizontal,
+  Settings2,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface FeedPageProps {
   onOpenText: (textId: string) => void;
-  onNavigatePublish: () => void;
+  onNavigatePublish: (languageCode?: string) => void;
+  onManageLanguages: () => void;
   theme: ThemeMode;
   onToggleTheme: () => void;
 }
@@ -44,7 +49,6 @@ function formatShortDate(iso: string): string {
 
 function estimateReadingMinutes(content: string): number {
   const words = content.trim().split(/\s+/).filter(Boolean).length;
-  // Also account for CJK scripts without spaces
   const cjkChars = (content.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/g) || []).length;
   const effectiveUnits = Math.max(words, Math.round(cjkChars / 2));
   return Math.max(1, Math.ceil(effectiveUnits / 160));
@@ -53,26 +57,55 @@ function estimateReadingMinutes(content: string): number {
 export function FeedPage({
   onOpenText,
   onNavigatePublish,
+  onManageLanguages,
   theme,
   onToggleTheme,
 }: FeedPageProps) {
-  const { profile } = useAuth();
+  const { user, profile, signOut } = useAuth();
+
+  // Canonical study languages from the user's profile (strictly isolated to what they study)
+  const studyLanguages = useMemo(
+    () => normalizeTargetLanguages(profile?.target_languages),
+    [profile?.target_languages]
+  );
+
+  // Active study language defaults automatically to the first configured language
+  const [activeLang, setActiveLang] = useState<string>(() => studyLanguages[0] || '');
+
+  // Keep activeLang synced whenever profile.target_languages updates
+  useEffect(() => {
+    if (studyLanguages.length === 0) {
+      setActiveLang('');
+    } else if (!activeLang || !studyLanguages.includes(activeLang)) {
+      setActiveLang(studyLanguages[0]);
+    }
+  }, [studyLanguages, activeLang]);
+
   const [texts, setTexts] = useState<TextItem[]>([]);
+  const [authorMap, setAuthorMap] = useState<Record<string, AuthorSummary>>({});
+  const [progressMap, setProgressMap] = useState<Record<string, ReadingStatus>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [schemaMissing, setSchemaMissing] = useState(false);
 
-  const [selectedLang, setSelectedLang] = useState<string>('ALL');
   const [selectedLevel, setSelectedLevel] = useState<string>('ALL');
   const [onlyAudio, setOnlyAudio] = useState(false);
   const [onlyExam, setOnlyExam] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   const fetchTexts = useCallback(async () => {
+    if (!activeLang) {
+      setTexts([]);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setSchemaMissing(false);
 
+    // Query global shared `texts` table filtered strictly by the active study language
+    const canonicalLang = normalizeLanguageCode(activeLang);
     const { data, error: fetchErr } = await supabase
       .from('texts')
       .select(
@@ -88,11 +121,11 @@ export function FeedPage({
         audio_timestamps,
         is_public,
         created_at,
-        author:profiles!texts_author_id_fkey(id, username, full_name, avatar_url),
         exams(id, title),
         author_annotations(id)
       `
       )
+      .eq('language', canonicalLang)
       .order('created_at', { ascending: false });
 
     if (fetchErr) {
@@ -107,46 +140,80 @@ export function FeedPage({
 
     const normalized = ((data || []) as unknown as TextItem[]).map((item) => ({
       ...item,
-      author: Array.isArray(item.author) ? item.author[0] ?? null : item.author ?? null,
+      language: normalizeLanguageCode(item.language),
       exams: Array.isArray(item.exams) ? item.exams : [],
       author_annotations: Array.isArray(item.author_annotations) ? item.author_annotations : [],
     }));
 
     setTexts(normalized);
+
+    // Fetch public author display names safely + user's personal reading progress in parallel
+    const uniqueAuthorIds = Array.from(new Set(normalized.map((t) => t.author_id).filter(Boolean)));
+    const textIds = normalized.map((t) => t.id);
+
+    const [authorsRes, progressRes] = await Promise.all([
+      uniqueAuthorIds.length > 0
+        ? supabase.rpc('get_author_summaries', { p_author_ids: uniqueAuthorIds })
+        : Promise.resolve({ data: null, error: null }),
+      user && textIds.length > 0
+        ? supabase
+            .from('user_reading_progress')
+            .select('text_id, status')
+            .eq('user_id', user.id)
+            .in('text_id', textIds)
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+
+    if (!authorsRes.error && Array.isArray(authorsRes.data)) {
+      const nextMap: Record<string, AuthorSummary> = {};
+      for (const row of authorsRes.data as AuthorSummary[]) {
+        nextMap[row.id] = row;
+      }
+      setAuthorMap(nextMap);
+    }
+
+    if (!progressRes.error && Array.isArray(progressRes.data)) {
+      const nextProgress: Record<string, ReadingStatus> = {};
+      for (const row of progressRes.data as Array<{ text_id: string; status: ReadingStatus }>) {
+        nextProgress[row.text_id] = row.status;
+      }
+      setProgressMap(nextProgress);
+    }
+
     setLoading(false);
-  }, []);
+  }, [activeLang, user]);
 
   useEffect(() => {
     fetchTexts();
   }, [fetchTexts]);
 
-  // Language filter options: prioritize user's target languages + languages present in library
-  const languageTabs = useMemo(() => {
-    const codeSet = new Set<string>();
-    (profile?.target_languages || []).forEach((c) => codeSet.add(c.toUpperCase()));
-    texts.forEach((t) => codeSet.add(t.language.toUpperCase()));
-    if (codeSet.size === 0) {
-      ['JA', 'ZH', 'EN', 'ES', 'ID'].forEach((c) => codeSet.add(c));
-    }
-    return Array.from(codeSet);
-  }, [profile?.target_languages, texts]);
+  // Reset secondary difficulty filter when switching study language
+  useEffect(() => {
+    setSelectedLevel('ALL');
+  }, [activeLang]);
 
-  // Available difficulty levels from data + common defaults
+  const activeLangMeta = useMemo(
+    () => NATIVE_LANGUAGE_OPTIONS.find((l) => l.sourceCode === activeLang),
+    [activeLang]
+  );
+
+  // Available difficulty levels aligned to the active study language + DB items
   const levelOptions = useMemo(() => {
-    const set = new Set<string>(['Iniciante', 'Intermediário', 'Avançado']);
+    const set = new Set<string>(
+      activeLangMeta?.suggestedLevels || ['Iniciante', 'Intermediário', 'Avançado']
+    );
     texts.forEach((t) => {
       if (t.difficulty_level) set.add(t.difficulty_level);
     });
-    COMMON_DIFFICULTY_LEVELS.slice(3, 12).forEach((l) => set.add(l));
+    if (set.size === 0) {
+      COMMON_DIFFICULTY_LEVELS.slice(0, 6).forEach((l) => set.add(l));
+    }
     return Array.from(set);
-  }, [texts]);
+  }, [texts, activeLangMeta]);
 
   const filteredTexts = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return texts.filter((item) => {
-      if (selectedLang !== 'ALL' && item.language.toUpperCase() !== selectedLang) {
-        return false;
-      }
       if (
         selectedLevel !== 'ALL' &&
         item.difficulty_level.toLowerCase() !== selectedLevel.toLowerCase()
@@ -160,19 +227,24 @@ export function FeedPage({
         return false;
       }
       if (q) {
-        const hay = `${item.title} ${item.content} ${item.author?.username || ''} ${
-          item.author?.full_name || ''
+        const author = authorMap[item.author_id];
+        const hay = `${item.title} ${item.content} ${author?.username || ''} ${
+          author?.full_name || ''
         }`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
-  }, [texts, selectedLang, selectedLevel, onlyAudio, onlyExam, searchQuery]);
+  }, [texts, selectedLevel, onlyAudio, onlyExam, searchQuery, authorMap]);
 
   if (schemaMissing) {
     return (
       <div className="px-4 py-8">
-        <SchemaSetupBanner reason="tables_missing" onRetry={fetchTexts} />
+        <SchemaSetupBanner
+          reason="tables_missing"
+          onRetry={fetchTexts}
+          onSignOut={() => signOut()}
+        />
       </div>
     );
   }
@@ -183,18 +255,20 @@ export function FeedPage({
       <section className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 pb-8 border-b border-slate-200 dark:border-slate-800">
         <div className="max-w-2xl">
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Biblioteca de Leitura · Idioma nativo para tradução:{' '}
+            Biblioteca de {activeLang ? getLanguageLabel(activeLang) : 'Leitura'} · Tradução para{' '}
             <span className="font-semibold text-slate-800 dark:text-slate-200">
               {getLanguageLabel(profile?.native_language || 'PT-BR')}
             </span>{' '}
             <span className="font-mono text-[11px]">({profile?.native_language || 'PT-BR'})</span>
           </p>
           <h1 className="mt-2 font-display text-3xl sm:text-4xl font-semibold tracking-tight text-slate-950 dark:text-slate-50">
-            Explore textos guiados com áudio e notas do autor
+            {activeLang
+              ? `Textos em ${getLanguageLabel(activeLang).split(' ')[0]} para sua prática`
+              : 'Escolha um idioma de estudo para começar'}
           </h1>
           <p className="mt-2.5 text-sm sm:text-base text-slate-600 dark:text-slate-300 leading-relaxed">
-            Clique ou selecione qualquer palavra durante a leitura para ver explicações do autor ou
-            traduções instantâneas via DeepL no seu idioma nativo.
+            Conteúdo compartilhado pela comunidade com áudio, notas prévias do autor e tradução
+            instantânea via DeepL no seu idioma nativo.
           </p>
         </div>
 
@@ -218,93 +292,15 @@ export function FeedPage({
         </div>
       </section>
 
-      {/* Filter Toolbar */}
-      <section className="py-6 space-y-4">
-        <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
-          {/* Search Input */}
-          <div className="relative flex-1 max-w-md">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="search"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Buscar por título, trecho ou autor..."
-              className="w-full pl-10 pr-4 py-2.5 text-sm rounded-lg bg-white dark:bg-[#131926] border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-orange-600"
-            />
-          </div>
-
-          {/* Difficulty + Feature Filter Controls */}
-          <div className="flex flex-wrap items-center gap-2.5">
-            <div className="flex items-center gap-2">
-              <SlidersHorizontal className="w-4 h-4 text-slate-400 shrink-0" />
-              <label htmlFor="feed-level-select" className="sr-only">
-                Filtrar por nível
-              </label>
-              <select
-                id="feed-level-select"
-                value={selectedLevel}
-                onChange={(e) => setSelectedLevel(e.target.value)}
-                className="px-3 py-2 text-xs font-medium rounded-lg bg-white dark:bg-[#131926] border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 focus:outline-none focus:border-orange-600 min-h-[40px]"
-              >
-                <option value="ALL">Todos os níveis</option>
-                {levelOptions.map((lvl) => (
-                  <option key={lvl} value={lvl}>
-                    {lvl}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setOnlyAudio((v) => !v)}
-              className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border transition-colors min-h-[40px] whitespace-nowrap ${
-                onlyAudio
-                  ? 'bg-orange-600 border-orange-600 text-white'
-                  : 'bg-white dark:bg-[#131926] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-700'
-              }`}
-            >
-              <Headphones className="w-3.5 h-3.5" />
-              <span>Com áudio</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setOnlyExam((v) => !v)}
-              className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border transition-colors min-h-[40px] whitespace-nowrap ${
-                onlyExam
-                  ? 'bg-orange-600 border-orange-600 text-white'
-                  : 'bg-white dark:bg-[#131926] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-700'
-              }`}
-            >
-              <ClipboardCheck className="w-3.5 h-3.5" />
-              <span>Com exame</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Language Segmented Filter Strip */}
+      {/* Study Language Quick Switcher (strictly user's target_languages + Manage button) */}
+      <section className="pt-6 pb-2 flex flex-wrap items-center justify-between gap-3">
         <div
           role="tablist"
-          aria-label="Filtrar textos por idioma"
+          aria-label="Seus idiomas de estudo"
           className="flex items-center gap-1.5 overflow-x-auto pb-1"
         >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={selectedLang === 'ALL'}
-            onClick={() => setSelectedLang('ALL')}
-            className={`px-3.5 py-2 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 min-h-[38px] ${
-              selectedLang === 'ALL'
-                ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-950 font-semibold'
-                : 'bg-slate-100 dark:bg-[#131926] text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            Todos os idiomas
-          </button>
-
-          {languageTabs.map((code) => {
-            const active = selectedLang === code;
+          {studyLanguages.map((code) => {
+            const active = activeLang === code;
             const meta = NATIVE_LANGUAGE_OPTIONS.find((l) => l.sourceCode === code);
             return (
               <button
@@ -312,25 +308,119 @@ export function FeedPage({
                 type="button"
                 role="tab"
                 aria-selected={active}
-                onClick={() => setSelectedLang(code)}
-                className={`px-3.5 py-2 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 min-h-[38px] ${
+                onClick={() => setActiveLang(code)}
+                className={`px-4 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 min-h-[40px] ${
                   active
-                    ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-950 font-semibold'
-                    : 'bg-slate-100 dark:bg-[#131926] text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                    ? 'bg-orange-600 text-white shadow-xs'
+                    : 'bg-slate-100 dark:bg-[#131926] text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
                 }`}
               >
-                {meta ? `${meta.label.split(' ')[0]} (${meta.nativeName})` : code}
+                {meta ? `${meta.label.split(' ')[0]} · ${meta.nativeName}` : code}
               </button>
             );
           })}
         </div>
+
+        <button
+          type="button"
+          onClick={onManageLanguages}
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-orange-600 dark:hover:text-orange-400 border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131926] rounded-lg transition-colors min-h-[40px] whitespace-nowrap shrink-0"
+        >
+          <Settings2 className="w-3.5 h-3.5" />
+          <span>Gerenciar idiomas</span>
+        </button>
       </section>
 
-      {/* Content Area */}
-      {loading ? (
+      {/* Secondary Search & Filter Toolbar */}
+      {studyLanguages.length > 0 && (
+        <section className="py-4 space-y-4">
+          <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
+            <div className="relative flex-1 max-w-md">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={`Buscar em ${getLanguageLabel(activeLang).split(' ')[0]}...`}
+                className="w-full pl-10 pr-4 py-2.5 text-sm rounded-lg bg-white dark:bg-[#131926] border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-orange-600"
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="flex items-center gap-2">
+                <SlidersHorizontal className="w-4 h-4 text-slate-400 shrink-0" />
+                <label htmlFor="feed-level-select" className="sr-only">
+                  Filtrar por nível
+                </label>
+                <select
+                  id="feed-level-select"
+                  value={selectedLevel}
+                  onChange={(e) => setSelectedLevel(e.target.value)}
+                  className="px-3 py-2 text-xs font-medium rounded-lg bg-white dark:bg-[#131926] border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 focus:outline-none focus:border-orange-600 min-h-[40px]"
+                >
+                  <option value="ALL">Todos os níveis</option>
+                  {levelOptions.map((lvl) => (
+                    <option key={lvl} value={lvl}>
+                      {lvl}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setOnlyAudio((v) => !v)}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border transition-colors min-h-[40px] whitespace-nowrap ${
+                  onlyAudio
+                    ? 'bg-orange-600 border-orange-600 text-white'
+                    : 'bg-white dark:bg-[#131926] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-700'
+                }`}
+              >
+                <Headphones className="w-3.5 h-3.5" />
+                <span>Com áudio</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setOnlyExam((v) => !v)}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border transition-colors min-h-[40px] whitespace-nowrap ${
+                  onlyExam
+                    ? 'bg-orange-600 border-orange-600 text-white'
+                    : 'bg-white dark:bg-[#131926] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-700'
+                }`}
+              >
+                <ClipboardCheck className="w-3.5 h-3.5" />
+                <span>Com exame</span>
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Main Content Area */}
+      {studyLanguages.length === 0 ? (
+        <div className="my-8 p-8 rounded-2xl bg-white dark:bg-[#131926] border border-slate-200 dark:border-slate-800 max-w-xl">
+          <h2 className="font-display text-2xl font-semibold text-slate-900 dark:text-slate-50">
+            Nenhum idioma de estudo selecionado
+          </h2>
+          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            Adicione um ou mais idiomas no seu perfil para filtrar automaticamente os textos da
+            biblioteca global do WenLang.
+          </p>
+          <button
+            type="button"
+            onClick={onManageLanguages}
+            className="mt-5 px-5 py-2.5 rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold transition-colors min-h-[44px]"
+          >
+            Gerenciar idiomas no perfil
+          </button>
+        </div>
+      ) : loading ? (
         <div className="py-20 flex flex-col items-center justify-center text-slate-500 dark:text-slate-400 gap-3">
           <Loader2 className="w-6 h-6 animate-spin text-orange-600" />
-          <p className="text-sm">Carregando biblioteca do Supabase...</p>
+          <p className="text-sm">
+            Carregando textos em {getLanguageLabel(activeLang).split(' ')[0]}...
+          </p>
         </div>
       ) : error ? (
         <div className="p-5 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-red-700 dark:text-red-300 flex items-start gap-3">
@@ -360,20 +450,19 @@ export function FeedPage({
           <div className="md:col-span-7 p-8 flex flex-col justify-center">
             <h2 className="font-display text-2xl font-semibold text-slate-900 dark:text-slate-50">
               {texts.length === 0
-                ? 'Sua biblioteca ainda está vazia'
+                ? `Ainda não há textos em ${getLanguageLabel(activeLang).split(' ')[0]}`
                 : 'Nenhum texto corresponde a estes filtros'}
             </h2>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
               {texts.length === 0
-                ? 'Publique o primeiro texto com narração em áudio, notas prévias de vocabulário e um exame de compreensão para começar a estudar no Web e no Android.'
-                : 'Tente limpar os filtros de idioma, nível ou pesquisa para visualizar os textos disponíveis.'}
+                ? `Seja o primeiro a publicar um texto em ${getLanguageLabel(activeLang)} com áudio, notas do autor e exame de compreensão para toda a comunidade.`
+                : 'Tente limpar os filtros de nível, áudio, exame ou pesquisa para visualizar os textos disponíveis neste idioma.'}
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
               {texts.length > 0 && (
                 <button
                   type="button"
                   onClick={() => {
-                    setSelectedLang('ALL');
                     setSelectedLevel('ALL');
                     setOnlyAudio(false);
                     setOnlyExam(false);
@@ -386,11 +475,11 @@ export function FeedPage({
               )}
               <button
                 type="button"
-                onClick={onNavigatePublish}
+                onClick={() => onNavigatePublish(activeLang)}
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-orange-600 hover:bg-orange-700 rounded-lg transition-colors min-h-[40px]"
               >
                 <PenLine className="w-4 h-4" />
-                <span>Publicar conteúdo</span>
+                <span>Publicar em {getLanguageLabel(activeLang).split(' ')[0]}</span>
               </button>
             </div>
           </div>
@@ -402,8 +491,15 @@ export function FeedPage({
             const hasExam = Boolean(item.exams && item.exams.length > 0);
             const notesCount = item.author_annotations?.length || 0;
             const readMins = estimateReadingMinutes(item.content);
+            const authorSummary = authorMap[item.author_id];
             const authorLabel =
-              item.author?.full_name || item.author?.username || 'Autor da comunidade';
+              authorSummary?.full_name ||
+              authorSummary?.username ||
+              (user && item.author_id === user.id
+                ? profile?.full_name || profile?.username
+                : null) ||
+              'Autor da comunidade';
+            const readingStatus = progressMap[item.id];
             const coverValid = isSafeMediaUrl(item.cover_image_url);
 
             return (
@@ -432,7 +528,7 @@ export function FeedPage({
                   ) : (
                     <div className="w-full h-full p-6 flex flex-col justify-between bg-gradient-to-br from-slate-100 via-slate-50 to-orange-50/40 dark:from-[#161E2E] dark:via-[#131926] dark:to-slate-900">
                       <span className="font-mono text-xs text-slate-500 dark:text-slate-400">
-                        {item.language.toUpperCase()} · {item.difficulty_level}
+                        {item.language} · {item.difficulty_level}
                       </span>
                       <span className="font-display text-2xl font-medium text-slate-400/70 dark:text-slate-600 truncate">
                         {getLanguageNativeName(item.language)}
@@ -451,6 +547,21 @@ export function FeedPage({
                     <span>{item.difficulty_level}</span>
                     <span aria-hidden="true">·</span>
                     <span className="tabular-nums">{readMins} min</span>
+                    {readingStatus === 'completed' && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-400">
+                          <CheckCircle2 className="w-3 h-3" />
+                          <span>Concluído</span>
+                        </span>
+                      </>
+                    )}
+                    {readingStatus === 'reading' && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="font-medium text-sky-700 dark:text-sky-400">Lendo</span>
+                      </>
+                    )}
                     {!item.is_public && (
                       <>
                         <span aria-hidden="true">·</span>
@@ -467,7 +578,6 @@ export function FeedPage({
                     {item.content}
                   </p>
 
-                  {/* Quiet capability indicators & author line */}
                   <div className="mt-4 pt-3.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
                     <span className="truncate">
                       {authorLabel} · {formatShortDate(item.created_at)}

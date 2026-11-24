@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import type { Session, User } from '@supabase/supabase-js';
 import type { Profile } from '../types/database';
 import { supabase, isSupabaseConfigured, isSchemaMissingError } from '../services/supabaseClient';
+import { normalizeTargetLanguages, normalizeToDeepLTarget } from '../constants/languages';
 
 interface AuthContextValue {
   session: Session | null;
@@ -18,10 +19,25 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 function buildFallbackUsername(user: User): string {
-  const fromMeta = typeof user.user_metadata?.username === 'string' ? user.user_metadata.username : '';
+  const fromMeta =
+    typeof user.user_metadata?.username === 'string' ? user.user_metadata.username : '';
   const fromEmail = (user.email || 'reader').split('@')[0];
-  const base = (fromMeta || fromEmail).toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 18) || 'reader';
+  const base =
+    (fromMeta || fromEmail)
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, '')
+      .slice(0, 18) || 'reader';
   return `${base}_${user.id.replace(/-/g, '').slice(0, 6)}`;
+}
+
+function normalizeProfileRow(row: Profile): Profile {
+  return {
+    ...row,
+    native_language: normalizeToDeepLTarget(row.native_language || 'PT-BR'),
+    target_languages: normalizeTargetLanguages(row.target_languages),
+    onboarding_completed: Boolean(row.onboarding_completed),
+    xp_points: typeof row.xp_points === 'number' ? row.xp_points : 0,
+  };
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -34,6 +50,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const fetchOrProvisionProfile = useCallback(async (authUser: User): Promise<Profile | null> => {
     setProfileError(null);
+
+    // 1. Lookup existing row in global public.profiles by authenticated user id
     const { data, error } = await supabase
       .from('profiles')
       .select('*')
@@ -44,6 +62,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (isSchemaMissingError(error)) {
         setSchemaMissing(true);
       } else {
+        setSchemaMissing(false);
         setProfileError(error.message);
       }
       return null;
@@ -52,15 +71,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSchemaMissing(false);
 
     if (data) {
-      const normalized: Profile = {
-        ...data,
-        target_languages: Array.isArray(data.target_languages) ? data.target_languages : [],
-      };
+      const normalized = normalizeProfileRow(data as Profile);
       setProfile(normalized);
       return normalized;
     }
 
-    // If user confirmed email before trigger existed (e.g. legacy Android user), provision row now
+    // 2. If trigger hasn't created the profile yet (e.g. legacy account), safely upsert with ignoreDuplicates
     const insertPayload = {
       id: authUser.id,
       username: buildFallbackUsername(authUser),
@@ -74,25 +90,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       xp_points: 0,
     };
 
-    const { data: created, error: createError } = await supabase
+    const { error: upsertError } = await supabase
       .from('profiles')
-      .insert(insertPayload)
-      .select('*')
-      .single();
+      .upsert(insertPayload, { onConflict: 'id', ignoreDuplicates: true });
 
-    if (createError) {
-      if (isSchemaMissingError(createError)) {
+    if (upsertError) {
+      if (isSchemaMissingError(upsertError)) {
         setSchemaMissing(true);
       } else {
-        setProfileError(createError.message);
+        setProfileError(upsertError.message);
       }
       return null;
     }
 
-    const normalizedCreated: Profile = {
-      ...created,
-      target_languages: Array.isArray(created.target_languages) ? created.target_languages : [],
-    };
+    // 3. Read back the canonical row
+    const { data: provisioned, error: refetchError } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', authUser.id)
+      .single();
+
+    if (refetchError || !provisioned) {
+      if (isSchemaMissingError(refetchError)) {
+        setSchemaMissing(true);
+      } else {
+        setProfileError(refetchError?.message || 'Não foi possível carregar o perfil do usuário.');
+      }
+      return null;
+    }
+
+    const normalizedCreated = normalizeProfileRow(provisioned as Profile);
     setProfile(normalizedCreated);
     return normalizedCreated;
   }, []);
@@ -121,9 +148,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession(nextSession);
       setUser(nextSession?.user ?? null);
       if (nextSession?.user) {
+        setLoading(true);
         await fetchOrProvisionProfile(nextSession.user);
       } else {
         setProfile(null);
+        setSchemaMissing(false);
+        setProfileError(null);
       }
       if (active) setLoading(false);
     });
@@ -143,9 +173,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async (patch: Partial<Profile>): Promise<{ error: string | null; data?: Profile }> => {
       if (!user) return { error: 'Usuário não autenticado.' };
 
+      const normalizedPatch: Partial<Profile> = { ...patch };
+      if (typeof normalizedPatch.native_language === 'string') {
+        normalizedPatch.native_language = normalizeToDeepLTarget(normalizedPatch.native_language);
+      }
+      if (Array.isArray(normalizedPatch.target_languages)) {
+        normalizedPatch.target_languages = normalizeTargetLanguages(
+          normalizedPatch.target_languages
+        );
+      }
+
       const { data, error } = await supabase
         .from('profiles')
-        .update(patch)
+        .update(normalizedPatch)
         .eq('id', user.id)
         .select('*')
         .single();
@@ -157,10 +197,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { error: error.message };
       }
 
-      const normalized: Profile = {
-        ...data,
-        target_languages: Array.isArray(data.target_languages) ? data.target_languages : [],
-      };
+      const normalized = normalizeProfileRow(data as Profile);
       setProfile(normalized);
       return { error: null, data: normalized };
     },
@@ -172,6 +209,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setProfile(null);
     setSession(null);
     setUser(null);
+    setSchemaMissing(false);
+    setProfileError(null);
   }, []);
 
   return (

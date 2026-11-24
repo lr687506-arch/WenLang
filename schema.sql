@@ -1,13 +1,19 @@
 -- ============================================================================
--- WenLang Multiplatform Database Schema (Web + Android)
--- Execute this script in the Supabase SQL Editor
+-- WenLang Global Multiplatform Database Schema (Web + Android — LingQ Model)
+-- 100% Idempotent: safe to re-run anytime in the Supabase SQL Editor.
+--
+-- Architecture:
+--   1. Shared Global Content (visible to all authenticated community members):
+--      texts, author_annotations, exams, exam_questions,
+--      Storage buckets: wenlang-audios, wenlang-covers
+--   2. Individual Per-User Data (strictly isolated by auth.uid()):
+--      profiles, saved_vocabulary, user_exam_attempts, user_reading_progress
 -- ============================================================================
 
--- Extensions
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- ============================================================================
--- 1. PROFILES (Usuários e Preferências)
+-- 1. PROFILES (Perfil individual: idioma nativo, idiomas de estudo, XP)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS public.profiles (
   id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -21,9 +27,18 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Idempotent column guards for pre-existing tables
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS full_name text;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS avatar_url text;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS native_language text NOT NULL DEFAULT 'PT-BR';
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS target_languages text[] NOT NULL DEFAULT '{}'::text[];
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS onboarding_completed boolean NOT NULL DEFAULT false;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS xp_points integer NOT NULL DEFAULT 0;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
+
 CREATE INDEX IF NOT EXISTS idx_profiles_username ON public.profiles(username);
 
--- Automatically provision a profile when a user signs up (Web or Android)
+-- Automatically provision a profile whenever a new auth.users account is created
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -76,8 +91,48 @@ CREATE TRIGGER on_auth_user_created
   FOR EACH ROW
   EXECUTE FUNCTION public.handle_new_user();
 
+-- Backfill profiles for any existing auth.users who signed up before this trigger was created
+INSERT INTO public.profiles (id, username, full_name, native_language, target_languages, onboarding_completed, xp_points)
+SELECT
+  u.id,
+  left(
+    greatest(
+      coalesce(nullif(regexp_replace(lower(split_part(coalesce(u.email, 'reader'), '@', 1)), '[^a-z0-9_]+', '', 'g'), ''), 'reader'),
+      'reader'
+    ),
+    20
+  ) || '_' || left(replace(u.id::text, '-', ''), 6),
+  nullif(trim(u.raw_user_meta_data ->> 'full_name'), ''),
+  'PT-BR',
+  '{}'::text[],
+  false,
+  0
+FROM auth.users u
+WHERE NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = u.id)
+ON CONFLICT (id) DO NOTHING;
+
+-- Safe public author display lookup (exposes ONLY non-private author attribution fields,
+-- keeping private profile fields like native_language, target_languages, xp_points strictly isolated)
+CREATE OR REPLACE FUNCTION public.get_author_summaries(p_author_ids uuid[])
+RETURNS TABLE (
+  id uuid,
+  username text,
+  full_name text,
+  avatar_url text
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT p.id, p.username, p.full_name, p.avatar_url
+  FROM public.profiles p
+  WHERE p.id = ANY(p_author_ids);
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_author_summaries(uuid[]) TO authenticated;
+
 -- ============================================================================
--- 2. TEXTS (Textos e Conteúdos de Leitura)
+-- 2. TEXTS (Conteúdo Global Compartilhado)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS public.texts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -99,7 +154,7 @@ CREATE INDEX IF NOT EXISTS idx_texts_difficulty ON public.texts(difficulty_level
 CREATE INDEX IF NOT EXISTS idx_texts_created_at ON public.texts(created_at DESC);
 
 -- ============================================================================
--- 3. AUTHOR_ANNOTATIONS (Explicações Prévias do Autor)
+-- 3. AUTHOR_ANNOTATIONS (Explicações Prévias do Autor — Global Compartilhado)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS public.author_annotations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -120,7 +175,7 @@ CREATE INDEX IF NOT EXISTS idx_author_annotations_text_id ON public.author_annot
 CREATE INDEX IF NOT EXISTS idx_author_annotations_term ON public.author_annotations(text_id, lower(term_or_phrase));
 
 -- ============================================================================
--- 4. EXAMS, EXAM_QUESTIONS & USER_EXAM_ATTEMPTS (Quizzes de Compreensão)
+-- 4. EXAMS & EXAM_QUESTIONS (Quizzes Globais Compartilhados)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS public.exams (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -142,6 +197,9 @@ CREATE TABLE IF NOT EXISTS public.exam_questions (
 
 CREATE INDEX IF NOT EXISTS idx_exam_questions_exam_id ON public.exam_questions(exam_id);
 
+-- ============================================================================
+-- 5. USER_EXAM_ATTEMPTS (Histórico Individual de Exames)
+-- ============================================================================
 CREATE TABLE IF NOT EXISTS public.user_exam_attempts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -155,7 +213,7 @@ CREATE TABLE IF NOT EXISTS public.user_exam_attempts (
 CREATE INDEX IF NOT EXISTS idx_user_exam_attempts_user_id ON public.user_exam_attempts(user_id, completed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_exam_attempts_exam_id ON public.user_exam_attempts(exam_id);
 
--- Atomic helper RPC: records exam attempt and increments profile XP points
+-- Atomic RPC: records exam attempt and increments profile XP points
 CREATE OR REPLACE FUNCTION public.submit_exam_attempt(
   p_exam_id uuid,
   p_score integer,
@@ -188,7 +246,6 @@ BEGIN
   VALUES (v_user_id, p_exam_id, p_score, p_total_questions)
   RETURNING id INTO v_attempt_id;
 
-  -- Base 10 XP for completing + 15 XP per correct answer
   v_xp_gain := 10 + (p_score * 15);
 
   UPDATE public.profiles
@@ -203,7 +260,7 @@ $$;
 GRANT EXECUTE ON FUNCTION public.submit_exam_attempt(uuid, integer, integer) TO authenticated;
 
 -- ============================================================================
--- 5. SAVED_VOCABULARY (Palavras/Frases Salvas pelo Usuário)
+-- 6. SAVED_VOCABULARY (Vocabulário Individual Salvo pelo Aluno)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS public.saved_vocabulary (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -220,7 +277,22 @@ CREATE INDEX IF NOT EXISTS idx_saved_vocabulary_user_id ON public.saved_vocabula
 CREATE INDEX IF NOT EXISTS idx_saved_vocabulary_text_id ON public.saved_vocabulary(text_id);
 
 -- ============================================================================
--- 6. ROW LEVEL SECURITY (RLS) POLICIES
+-- 7. USER_READING_PROGRESS (Progresso Individual de Leitura nos Textos Globais)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.user_reading_progress (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  text_id uuid NOT NULL REFERENCES public.texts(id) ON DELETE CASCADE,
+  status text NOT NULL DEFAULT 'reading' CHECK (status IN ('reading', 'completed')),
+  last_read_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT uq_user_reading_progress_user_text UNIQUE (user_id, text_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_reading_progress_user_id ON public.user_reading_progress(user_id, last_read_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_reading_progress_text_id ON public.user_reading_progress(text_id);
+
+-- ============================================================================
+-- 8. ROW LEVEL SECURITY (RLS) POLICIES
 -- ============================================================================
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.texts ENABLE ROW LEVEL SECURITY;
@@ -229,30 +301,63 @@ ALTER TABLE public.exams ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.exam_questions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_exam_attempts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.saved_vocabulary ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_reading_progress ENABLE ROW LEVEL SECURITY;
 
--- PROFILES policies
+-- ----------------------------------------------------------------------------
+-- INDIVIDUAL DATA POLICIES (Strictly isolated by auth.uid())
+-- ----------------------------------------------------------------------------
+
+-- PROFILES: ALL strictly restricted to owner (auth.uid() = id)
 DROP POLICY IF EXISTS "Public profiles are viewable by everyone" ON public.profiles;
-CREATE POLICY "Public profiles are viewable by everyone"
-  ON public.profiles FOR SELECT
-  USING (true);
-
 DROP POLICY IF EXISTS "Users can insert own profile" ON public.profiles;
-CREATE POLICY "Users can insert own profile"
-  ON public.profiles FOR INSERT
-  TO authenticated
-  WITH CHECK (auth.uid() = id);
-
 DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
-CREATE POLICY "Users can update own profile"
-  ON public.profiles FOR UPDATE
+DROP POLICY IF EXISTS "Users manage own profile strictly" ON public.profiles;
+CREATE POLICY "Users manage own profile strictly"
+  ON public.profiles FOR ALL
   TO authenticated
   USING (auth.uid() = id)
   WITH CHECK (auth.uid() = id);
 
--- TEXTS policies
+-- SAVED_VOCABULARY: ALL strictly restricted to owner (auth.uid() = user_id)
+DROP POLICY IF EXISTS "Users can view own vocabulary" ON public.saved_vocabulary;
+DROP POLICY IF EXISTS "Users can save own vocabulary" ON public.saved_vocabulary;
+DROP POLICY IF EXISTS "Users can update own vocabulary" ON public.saved_vocabulary;
+DROP POLICY IF EXISTS "Users can delete own vocabulary" ON public.saved_vocabulary;
+DROP POLICY IF EXISTS "Users manage own vocabulary strictly" ON public.saved_vocabulary;
+CREATE POLICY "Users manage own vocabulary strictly"
+  ON public.saved_vocabulary FOR ALL
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+-- USER_EXAM_ATTEMPTS: ALL strictly restricted to owner (auth.uid() = user_id)
+DROP POLICY IF EXISTS "Users can view own exam attempts" ON public.user_exam_attempts;
+DROP POLICY IF EXISTS "Users can record own exam attempts" ON public.user_exam_attempts;
+DROP POLICY IF EXISTS "Users manage own exam attempts strictly" ON public.user_exam_attempts;
+CREATE POLICY "Users manage own exam attempts strictly"
+  ON public.user_exam_attempts FOR ALL
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+-- USER_READING_PROGRESS: ALL strictly restricted to owner (auth.uid() = user_id)
+DROP POLICY IF EXISTS "Users manage own reading progress strictly" ON public.user_reading_progress;
+CREATE POLICY "Users manage own reading progress strictly"
+  ON public.user_reading_progress FOR ALL
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+-- ----------------------------------------------------------------------------
+-- GLOBAL SHARED CONTENT POLICIES (SELECT for all authenticated; write for author)
+-- ----------------------------------------------------------------------------
+
+-- TEXTS
 DROP POLICY IF EXISTS "Public texts or own texts are viewable" ON public.texts;
-CREATE POLICY "Public texts or own texts are viewable"
+DROP POLICY IF EXISTS "Authenticated users can read public texts or own texts" ON public.texts;
+CREATE POLICY "Authenticated users can read public texts or own texts"
   ON public.texts FOR SELECT
+  TO authenticated
   USING (is_public = true OR auth.uid() = author_id);
 
 DROP POLICY IF EXISTS "Authenticated users can publish texts" ON public.texts;
@@ -274,10 +379,11 @@ CREATE POLICY "Authors can delete own texts"
   TO authenticated
   USING (auth.uid() = author_id);
 
--- AUTHOR_ANNOTATIONS policies
+-- AUTHOR_ANNOTATIONS
 DROP POLICY IF EXISTS "Annotations viewable for accessible texts" ON public.author_annotations;
 CREATE POLICY "Annotations viewable for accessible texts"
   ON public.author_annotations FOR SELECT
+  TO authenticated
   USING (
     EXISTS (
       SELECT 1 FROM public.texts t
@@ -329,10 +435,11 @@ CREATE POLICY "Authors can delete annotations on own texts"
     )
   );
 
--- EXAMS policies
+-- EXAMS
 DROP POLICY IF EXISTS "Exams viewable for accessible texts" ON public.exams;
 CREATE POLICY "Exams viewable for accessible texts"
   ON public.exams FOR SELECT
+  TO authenticated
   USING (
     EXISTS (
       SELECT 1 FROM public.texts t
@@ -360,10 +467,11 @@ CREATE POLICY "Authors can manage exams on own texts"
     )
   );
 
--- EXAM_QUESTIONS policies
+-- EXAM_QUESTIONS
 DROP POLICY IF EXISTS "Exam questions viewable for accessible exams" ON public.exam_questions;
 CREATE POLICY "Exam questions viewable for accessible exams"
   ON public.exam_questions FOR SELECT
+  TO authenticated
   USING (
     EXISTS (
       SELECT 1 FROM public.exams e
@@ -394,47 +502,8 @@ CREATE POLICY "Authors can manage questions on own exams"
     )
   );
 
--- USER_EXAM_ATTEMPTS policies
-DROP POLICY IF EXISTS "Users can view own exam attempts" ON public.user_exam_attempts;
-CREATE POLICY "Users can view own exam attempts"
-  ON public.user_exam_attempts FOR SELECT
-  TO authenticated
-  USING (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "Users can record own exam attempts" ON public.user_exam_attempts;
-CREATE POLICY "Users can record own exam attempts"
-  ON public.user_exam_attempts FOR INSERT
-  TO authenticated
-  WITH CHECK (auth.uid() = user_id);
-
--- SAVED_VOCABULARY policies
-DROP POLICY IF EXISTS "Users can view own vocabulary" ON public.saved_vocabulary;
-CREATE POLICY "Users can view own vocabulary"
-  ON public.saved_vocabulary FOR SELECT
-  TO authenticated
-  USING (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "Users can save own vocabulary" ON public.saved_vocabulary;
-CREATE POLICY "Users can save own vocabulary"
-  ON public.saved_vocabulary FOR INSERT
-  TO authenticated
-  WITH CHECK (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "Users can update own vocabulary" ON public.saved_vocabulary;
-CREATE POLICY "Users can update own vocabulary"
-  ON public.saved_vocabulary FOR UPDATE
-  TO authenticated
-  USING (auth.uid() = user_id)
-  WITH CHECK (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "Users can delete own vocabulary" ON public.saved_vocabulary;
-CREATE POLICY "Users can delete own vocabulary"
-  ON public.saved_vocabulary FOR DELETE
-  TO authenticated
-  USING (auth.uid() = user_id);
-
 -- ============================================================================
--- 7. SUPABASE STORAGE BUCKETS & POLICIES
+-- 9. SUPABASE STORAGE BUCKETS & POLICIES (Idempotent ON CONFLICT DO NOTHING)
 -- ============================================================================
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
@@ -444,10 +513,7 @@ VALUES (
   26214400, -- 25 MB
   ARRAY['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/ogg', 'audio/mp4', 'audio/x-m4a', 'audio/aac']
 )
-ON CONFLICT (id) DO UPDATE SET
-  public = EXCLUDED.public,
-  file_size_limit = EXCLUDED.file_size_limit,
-  allowed_mime_types = EXCLUDED.allowed_mime_types;
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
@@ -457,12 +523,9 @@ VALUES (
   5242880, -- 5 MB
   ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/avif']
 )
-ON CONFLICT (id) DO UPDATE SET
-  public = EXCLUDED.public,
-  file_size_limit = EXCLUDED.file_size_limit,
-  allowed_mime_types = EXCLUDED.allowed_mime_types;
+ON CONFLICT (id) DO NOTHING;
 
--- Public read access for audio and cover buckets
+-- Public read access for shared audio and cover buckets
 DROP POLICY IF EXISTS "Public read access for wenlang-audios" ON storage.objects;
 CREATE POLICY "Public read access for wenlang-audios"
   ON storage.objects FOR SELECT
@@ -473,7 +536,7 @@ CREATE POLICY "Public read access for wenlang-covers"
   ON storage.objects FOR SELECT
   USING (bucket_id = 'wenlang-covers');
 
--- Authenticated upload restricted to own user folder: <auth.uid()>/filename
+-- Authenticated upload/update/delete restricted to own author folder: <auth.uid()>/filename
 DROP POLICY IF EXISTS "Authenticated users upload own audios" ON storage.objects;
 CREATE POLICY "Authenticated users upload own audios"
   ON storage.objects FOR INSERT
@@ -527,3 +590,6 @@ CREATE POLICY "Authenticated users delete own covers"
     bucket_id = 'wenlang-covers'
     AND (storage.foldername(name))[1] = auth.uid()::text
   );
+
+-- Refresh PostgREST schema cache immediately
+NOTIFY pgrst, 'reload schema';

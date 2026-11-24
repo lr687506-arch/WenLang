@@ -80,15 +80,18 @@ export function isSafeMediaUrl(url: string | null | undefined): boolean {
   }
 }
 
-export function isSchemaMissingError(error: { code?: string; message?: string } | null | undefined): boolean {
+export function isSchemaMissingError(
+  error: { code?: string; message?: string; details?: string } | null | undefined
+): boolean {
   if (!error) return false;
-  const code = error.code || '';
+  const code = (error.code || '').trim();
   const msg = (error.message || '').toLowerCase();
+  if (code === '42P01' || code === 'PGRST205') {
+    return true;
+  }
   return (
-    code === '42P01' ||
-    code === 'PGRST205' ||
     msg.includes('could not find the table') ||
-    msg.includes('relation') && msg.includes('does not exist')
+    (msg.includes('relation') && msg.includes('public.') && msg.includes('does not exist'))
   );
 }
 

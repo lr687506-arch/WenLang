@@ -1,7 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { useAuth } from '../context/AuthContext';
-import { NATIVE_LANGUAGE_OPTIONS, getLanguageLabel } from '../constants/languages';
+import {
+  NATIVE_LANGUAGE_OPTIONS,
+  getLanguageLabel,
+  normalizeLanguageCode,
+  normalizeTargetLanguages,
+  normalizeToDeepLTarget,
+} from '../constants/languages';
 import type { TextItem, UserExamAttempt } from '../types/database';
 import type { ThemeMode } from '../hooks/useTheme';
 import {
@@ -27,8 +33,12 @@ export function ProfilePage({ theme, onToggleTheme, onOpenText }: ProfilePagePro
 
   const [username, setUsername] = useState(profile?.username || '');
   const [fullName, setFullName] = useState(profile?.full_name || '');
-  const [nativeLanguage, setNativeLanguage] = useState(profile?.native_language || 'PT-BR');
-  const [targetLanguages, setTargetLanguages] = useState<string[]>(profile?.target_languages || []);
+  const [nativeLanguage, setNativeLanguage] = useState(
+    normalizeToDeepLTarget(profile?.native_language || 'PT-BR')
+  );
+  const [targetLanguages, setTargetLanguages] = useState<string[]>(
+    normalizeTargetLanguages(profile?.target_languages)
+  );
 
   const [saving, setSaving] = useState(false);
   const [savedNotice, setSavedNotice] = useState(false);
@@ -42,8 +52,8 @@ export function ProfilePage({ theme, onToggleTheme, onOpenText }: ProfilePagePro
     if (!profile) return;
     setUsername(profile.username);
     setFullName(profile.full_name || '');
-    setNativeLanguage(profile.native_language || 'PT-BR');
-    setTargetLanguages(profile.target_languages || []);
+    setNativeLanguage(normalizeToDeepLTarget(profile.native_language || 'PT-BR'));
+    setTargetLanguages(normalizeTargetLanguages(profile.target_languages));
   }, [profile]);
 
   useEffect(() => {
@@ -87,8 +97,9 @@ export function ProfilePage({ theme, onToggleTheme, onOpenText }: ProfilePagePro
   }, [user]);
 
   const toggleTarget = (sourceCode: string) => {
+    const canonical = normalizeLanguageCode(sourceCode);
     setTargetLanguages((prev) =>
-      prev.includes(sourceCode) ? prev.filter((c) => c !== sourceCode) : [...prev, sourceCode]
+      prev.includes(canonical) ? prev.filter((c) => c !== canonical) : [...prev, canonical]
     );
   };
 
@@ -103,12 +114,18 @@ export function ProfilePage({ theme, onToggleTheme, onOpenText }: ProfilePagePro
       return;
     }
 
+    const normalizedTargets = normalizeTargetLanguages(targetLanguages);
+    if (normalizedTargets.length === 0) {
+      setError('Selecione pelo menos um idioma de estudo para filtrar sua biblioteca.');
+      return;
+    }
+
     setSaving(true);
     const { error: err } = await updateProfile({
       username: cleanedUsername,
       full_name: fullName.trim() || null,
-      native_language: nativeLanguage,
-      target_languages: targetLanguages,
+      native_language: normalizeToDeepLTarget(nativeLanguage),
+      target_languages: normalizedTargets,
     });
     setSaving(false);
 

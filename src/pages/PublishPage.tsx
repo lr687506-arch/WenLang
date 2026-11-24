@@ -9,6 +9,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   NATIVE_LANGUAGE_OPTIONS,
   CURATED_EDITORIAL_COVERS,
+  normalizeLanguageCode,
 } from '../constants/languages';
 import {
   Upload,
@@ -25,6 +26,7 @@ import {
 } from 'lucide-react';
 
 interface PublishPageProps {
+  initialLanguage?: string;
   onPublished: (textId: string) => void;
   onCancel: () => void;
 }
@@ -46,12 +48,14 @@ interface DraftQuestion {
   explanation: string;
 }
 
-export function PublishPage({ onPublished, onCancel }: PublishPageProps) {
+export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishPageProps) {
   const { user, profile } = useAuth();
   const contentRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // Core text fields
-  const defaultLang = profile?.target_languages?.[0] || 'JA';
+  // Core text fields aligned to canonical 2-letter codes ('ES', 'EN', 'ZH', 'JA', 'ID', 'PT', ...)
+  const defaultLang = normalizeLanguageCode(
+    initialLanguage || profile?.target_languages?.[0] || 'ES'
+  );
   const [title, setTitle] = useState('');
   const [language, setLanguage] = useState(defaultLang);
   const [difficultyLevel, setDifficultyLevel] = useState('Iniciante');
@@ -257,7 +261,7 @@ export function PublishPage({ onPublished, onCancel }: PublishPageProps) {
           author_id: user.id,
           title: title.trim(),
           content: content.trim(),
-          language: language.toUpperCase(),
+          language: normalizeLanguageCode(language),
           difficulty_level: difficultyLevel.trim() || 'Iniciante',
           cover_image_url: finalCoverUrl,
           audio_url: finalAudioUrl,

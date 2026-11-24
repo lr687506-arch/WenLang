@@ -133,31 +133,117 @@ export const CURATED_EDITORIAL_COVERS = [
   },
 ];
 
+const LANGUAGE_CODE_ALIASES: Record<string, string> = {
+  PT: 'PT',
+  'PT-BR': 'PT',
+  'PT-PT': 'PT',
+  PORTUGUESE: 'PT',
+  PORTUGUES: 'PT',
+  'PORTUGUÊS': 'PT',
+  EN: 'EN',
+  'EN-US': 'EN',
+  'EN-GB': 'EN',
+  ENGLISH: 'EN',
+  INGLES: 'EN',
+  'INGLÊS': 'EN',
+  ES: 'ES',
+  'ES-ES': 'ES',
+  'ES-MX': 'ES',
+  SPANISH: 'ES',
+  ESPANHOL: 'ES',
+  JA: 'JA',
+  JP: 'JA',
+  'JA-JP': 'JA',
+  JAPANESE: 'JA',
+  JAPONES: 'JA',
+  'JAPONÊS': 'JA',
+  ZH: 'ZH',
+  CN: 'ZH',
+  'ZH-CN': 'ZH',
+  'ZH-HANS': 'ZH',
+  'ZH-HANT': 'ZH',
+  CHINESE: 'ZH',
+  CHINES: 'ZH',
+  'CHINÊS': 'ZH',
+  ID: 'ID',
+  'ID-ID': 'ID',
+  INDONESIAN: 'ID',
+  INDONESIO: 'ID',
+  'INDONÉSIO': 'ID',
+  FR: 'FR',
+  'FR-FR': 'FR',
+  FRENCH: 'FR',
+  FRANCES: 'FR',
+  'FRANCÊS': 'FR',
+  DE: 'DE',
+  'DE-DE': 'DE',
+  GERMAN: 'DE',
+  ALEMAO: 'DE',
+  'ALEMÃO': 'DE',
+  KO: 'KO',
+  KR: 'KO',
+  'KO-KR': 'KO',
+  KOREAN: 'KO',
+  COREANO: 'KO',
+  IT: 'IT',
+  'IT-IT': 'IT',
+  ITALIAN: 'IT',
+  ITALIANO: 'IT',
+};
+
+/**
+ * Standardizes any study/text language input into canonical 2-letter uppercase
+ * source codes ('ES', 'EN', 'ZH', 'JA', 'ID', 'PT', 'FR', 'DE', 'KO', 'IT').
+ */
+export function normalizeLanguageCode(code: string | null | undefined): string {
+  const upper = (code || '').trim().toUpperCase();
+  if (!upper) return '';
+  if (LANGUAGE_CODE_ALIASES[upper]) return LANGUAGE_CODE_ALIASES[upper];
+  const base = upper.split('-')[0];
+  if (LANGUAGE_CODE_ALIASES[base]) return LANGUAGE_CODE_ALIASES[base];
+  return base;
+}
+
+/**
+ * Normalizes and deduplicates an array of target study languages.
+ */
+export function normalizeTargetLanguages(codes: string[] | null | undefined): string[] {
+  if (!Array.isArray(codes)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of codes) {
+    const norm = normalizeLanguageCode(raw);
+    if (norm && !seen.has(norm)) {
+      seen.add(norm);
+      out.push(norm);
+    }
+  }
+  return out;
+}
+
 export function getLanguageLabel(code: string): string {
-  const normalized = code.trim().toUpperCase();
+  const normalized = normalizeLanguageCode(code);
+  const rawUpper = (code || '').trim().toUpperCase();
   const exact = NATIVE_LANGUAGE_OPTIONS.find(
-    (l) => l.deeplTargetCode === normalized || l.sourceCode === normalized
+    (l) => l.deeplTargetCode === rawUpper || l.sourceCode === normalized
   );
-  if (exact) return exact.label;
-  const base = normalized.split('-')[0];
-  const byBase = NATIVE_LANGUAGE_OPTIONS.find((l) => l.sourceCode === base);
-  return byBase ? byBase.label : code;
+  return exact ? exact.label : code;
 }
 
 export function getLanguageNativeName(code: string): string {
-  const normalized = code.trim().toUpperCase();
+  const normalized = normalizeLanguageCode(code);
+  const rawUpper = (code || '').trim().toUpperCase();
   const exact = NATIVE_LANGUAGE_OPTIONS.find(
-    (l) => l.deeplTargetCode === normalized || l.sourceCode === normalized
+    (l) => l.deeplTargetCode === rawUpper || l.sourceCode === normalized
   );
-  if (exact) return exact.nativeName;
-  const base = normalized.split('-')[0];
-  const byBase = NATIVE_LANGUAGE_OPTIONS.find((l) => l.sourceCode === base);
-  return byBase ? byBase.nativeName : code;
+  return exact ? exact.nativeName : code;
 }
 
 export function normalizeToDeepLTarget(code: string): string {
   const upper = (code || 'PT-BR').trim().toUpperCase();
   if (upper === 'PT') return 'PT-BR';
   if (upper === 'EN') return 'EN-US';
+  if (upper === 'JP') return 'JA';
+  if (upper === 'CN') return 'ZH';
   return upper;
 }

@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import { supabase, isSafeMediaUrl } from '../services/supabaseClient';
 import { resolveTermMeaning, type LookupResult } from '../services/translationService';
 import { useAuth } from '../context/AuthContext';
-import type { TextItem, AuthorAnnotation, Exam } from '../types/database';
+import type { TextItem, AuthorAnnotation, Exam, AuthorSummary, ReadingStatus } from '../types/database';
 import { getLanguageLabel } from '../constants/languages';
 import type { ThemeMode } from '../hooks/useTheme';
 import {
@@ -23,6 +23,7 @@ import {
   Sun,
   Moon,
   Trash2,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface ReadingViewProps {
@@ -188,8 +189,11 @@ export function ReadingView({
 }: ReadingViewProps) {
   const { user, profile } = useAuth();
   const [textItem, setTextItem] = useState<TextItem | null>(null);
+  const [authorSummary, setAuthorSummary] = useState<AuthorSummary | null>(null);
   const [annotations, setAnnotations] = useState<AuthorAnnotation[]>([]);
   const [exam, setExam] = useState<Exam | null>(null);
+  const [readingStatus, setReadingStatus] = useState<ReadingStatus>('reading');
+  const [updatingProgress, setUpdatingProgress] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -216,18 +220,10 @@ export function ReadingView({
     setLoading(true);
     setError(null);
     setPopover(null);
+    setAuthorSummary(null);
 
     Promise.all([
-      supabase
-        .from('texts')
-        .select(
-          `
-          *,
-          author:profiles!texts_author_id_fkey(id, username, full_name, avatar_url)
-        `
-        )
-        .eq('id', textId)
-        .single(),
+      supabase.from('texts').select('*').eq('id', textId).single(),
       supabase
         .from('author_annotations')
         .select('*')
@@ -240,7 +236,15 @@ export function ReadingView({
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle(),
-    ]).then(([textRes, annRes, examRes]) => {
+      user
+        ? supabase
+            .from('user_reading_progress')
+            .select('status')
+            .eq('user_id', user.id)
+            .eq('text_id', textId)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+    ]).then(async ([textRes, annRes, examRes, progressRes]) => {
       if (!active) return;
       if (textRes.error || !textRes.data) {
         setError(textRes.error?.message || 'Texto não encontrado.');
@@ -249,19 +253,67 @@ export function ReadingView({
       }
 
       const rawText = textRes.data as unknown as TextItem;
-      setTextItem({
-        ...rawText,
-        author: Array.isArray(rawText.author) ? rawText.author[0] ?? null : rawText.author ?? null,
-      });
+      setTextItem(rawText);
       setAnnotations((annRes.data || []) as AuthorAnnotation[]);
       setExam((examRes.data as Exam | null) || null);
-      setLoading(false);
+
+      const existingStatus = (progressRes.data as { status?: ReadingStatus } | null)?.status;
+      setReadingStatus(existingStatus || 'reading');
+
+      // Record or refresh personal reading progress without downgrading 'completed'
+      if (user) {
+        supabase
+          .from('user_reading_progress')
+          .upsert(
+            {
+              user_id: user.id,
+              text_id: textId,
+              status: existingStatus || 'reading',
+              last_read_at: new Date().toISOString(),
+            },
+            { onConflict: 'user_id,text_id' }
+          )
+          .then(() => {});
+      }
+
+      // Safely fetch public author name via RPC (works with strict owner-only profiles RLS)
+      if (rawText.author_id) {
+        const { data: authors } = await supabase.rpc('get_author_summaries', {
+          p_author_ids: [rawText.author_id],
+        });
+        if (active && Array.isArray(authors) && authors[0]) {
+          setAuthorSummary(authors[0] as AuthorSummary);
+        }
+      }
+
+      if (active) setLoading(false);
     });
 
     return () => {
       active = false;
     };
-  }, [textId]);
+  }, [textId, user]);
+
+  const handleToggleCompleted = async () => {
+    if (!user || !textItem || updatingProgress) return;
+    const nextStatus: ReadingStatus = readingStatus === 'completed' ? 'reading' : 'completed';
+    setUpdatingProgress(true);
+    const { error: progErr } = await supabase
+      .from('user_reading_progress')
+      .upsert(
+        {
+          user_id: user.id,
+          text_id: textItem.id,
+          status: nextStatus,
+          last_read_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,text_id' }
+      );
+    if (!progErr) {
+      setReadingStatus(nextStatus);
+    }
+    setUpdatingProgress(false);
+  };
 
   // Close popover on Escape or outside click
   useEffect(() => {
@@ -627,6 +679,20 @@ export function ReadingView({
               {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
 
+            <button
+              type="button"
+              onClick={handleToggleCompleted}
+              disabled={updatingProgress}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap ${
+                readingStatus === 'completed'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-300'
+                  : 'bg-white dark:bg-[#131926] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:border-emerald-500'
+              }`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>{readingStatus === 'completed' ? 'Concluído' : 'Marcar concluído'}</span>
+            </button>
+
             {exam && (
               <button
                 type="button"
@@ -654,7 +720,11 @@ export function ReadingView({
             <span>{textItem.difficulty_level}</span>
             <span aria-hidden="true">·</span>
             <span>
-              Por {textItem.author?.full_name || textItem.author?.username || 'Autor WenLang'}
+              Por{' '}
+              {authorSummary?.full_name ||
+                authorSummary?.username ||
+                (isOwner ? profile?.full_name || profile?.username : null) ||
+                'Autor WenLang'}
             </span>
             {annotations.length > 0 && (
               <>

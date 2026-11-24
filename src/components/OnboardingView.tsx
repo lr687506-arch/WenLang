@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { NATIVE_LANGUAGE_OPTIONS } from '../constants/languages';
+import {
+  NATIVE_LANGUAGE_OPTIONS,
+  normalizeLanguageCode,
+  normalizeTargetLanguages,
+  normalizeToDeepLTarget,
+} from '../constants/languages';
 import { Check, AlertCircle, Loader2, LogOut, Globe2 } from 'lucide-react';
 
 export function OnboardingView() {
@@ -8,16 +13,20 @@ export function OnboardingView() {
 
   const [username, setUsername] = useState(profile?.username || '');
   const [fullName, setFullName] = useState(profile?.full_name || '');
-  const [nativeLanguage, setNativeLanguage] = useState(profile?.native_language || 'PT-BR');
-  const [targetLanguages, setTargetLanguages] = useState<string[]>(
-    profile?.target_languages?.length ? profile.target_languages : ['JA']
+  const [nativeLanguage, setNativeLanguage] = useState(
+    normalizeToDeepLTarget(profile?.native_language || 'PT-BR')
   );
+  const [targetLanguages, setTargetLanguages] = useState<string[]>(() => {
+    const existing = normalizeTargetLanguages(profile?.target_languages);
+    return existing.length ? existing : ['ES'];
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const toggleTargetLanguage = (sourceCode: string) => {
+    const canonical = normalizeLanguageCode(sourceCode);
     setTargetLanguages((prev) =>
-      prev.includes(sourceCode) ? prev.filter((c) => c !== sourceCode) : [...prev, sourceCode]
+      prev.includes(canonical) ? prev.filter((c) => c !== canonical) : [...prev, canonical]
     );
   };
 
@@ -34,7 +43,8 @@ export function OnboardingView() {
       setError('Selecione seu idioma nativo (obrigatório para traduções DeepL).');
       return;
     }
-    if (targetLanguages.length === 0) {
+    const normalizedTargets = normalizeTargetLanguages(targetLanguages);
+    if (normalizedTargets.length === 0) {
       setError('Selecione pelo menos um idioma que você deseja estudar.');
       return;
     }
@@ -43,8 +53,8 @@ export function OnboardingView() {
     const { error: updateErr } = await updateProfile({
       username: cleanedUsername,
       full_name: fullName.trim() || null,
-      native_language: nativeLanguage,
-      target_languages: targetLanguages,
+      native_language: normalizeToDeepLTarget(nativeLanguage),
+      target_languages: normalizedTargets,
       onboarding_completed: true,
     });
 

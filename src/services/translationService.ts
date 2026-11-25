@@ -175,47 +175,6 @@ async function lookupRemoteTranslationCache(
   return null;
 }
 
-function saveRemoteTranslationCache(params: {
-  sourceLang: string;
-  targetLang: string;
-  normalizedText: string;
-  contextKey: string;
-  originalText: string;
-  translatedText: string;
-  detectedSourceLanguage?: string | null;
-}): void {
-  if (
-    !remoteCacheAvailable ||
-    !params.normalizedText ||
-    params.normalizedText.length > MAX_REMOTE_CACHE_TEXT_LEN
-  ) {
-    return;
-  }
-
-  void supabase
-    .from('translation_cache')
-    .upsert(
-      {
-        source_language: params.sourceLang,
-        target_language: params.targetLang,
-        normalized_text: params.normalizedText,
-        context_key: params.contextKey,
-        original_text: params.originalText.slice(0, 1500),
-        translated_text: params.translatedText,
-        detected_source_language: params.detectedSourceLanguage ?? null,
-      },
-      {
-        onConflict: 'source_language,target_language,normalized_text',
-        ignoreDuplicates: true,
-      }
-    )
-    .then(({ error }) => {
-      if (error && (isSchemaMissingError(error) || error.code === '42P01' || error.code === 'PGRST205')) {
-        remoteCacheAvailable = false;
-      }
-    });
-}
-
 /**
  * Step A: Local Author Annotation Lookup (zero DeepL API consumption)
  * Priority:
@@ -443,17 +402,6 @@ export async function resolveTermMeaning(params: {
       payload.translatedText,
       payload.detectedSourceLanguage ?? canonicalSource
     );
-
-    // Fire-and-forget persistence into Supabase shared cache
-    saveRemoteTranslationCache({
-      sourceLang: canonicalSource,
-      targetLang,
-      normalizedText: normalizedKeyText,
-      contextKey,
-      originalText: cleanedSelection,
-      translatedText: payload.translatedText,
-      detectedSourceLanguage: payload.detectedSourceLanguage ?? canonicalSource,
-    });
 
     return cachedEntry;
   })();

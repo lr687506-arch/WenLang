@@ -439,7 +439,12 @@ CREATE POLICY "Authenticated users can insert translation cache"
     AND length(translated_text) <= 10000
   );
 
--- ----------------------------------------------------------------------------
+
+REVOKE ALL ON public.languages FROM anon, authenticated;
+GRANT SELECT ON public.languages TO authenticated;
+REVOKE ALL ON public.translation_cache FROM anon, authenticated;
+GRANT SELECT, INSERT ON public.translation_cache TO authenticated;
+
 -- GLOBAL SHARED CONTENT POLICIES (SELECT for all authenticated; write for author)
 -- ----------------------------------------------------------------------------
 

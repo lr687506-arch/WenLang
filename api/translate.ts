@@ -139,6 +139,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
+    const userSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+
     const body = (typeof req.body === 'string' ? JSON.parse(req.body) : req.body || {}) as Record<
       string,
       unknown
@@ -170,7 +175,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const sourceLang = normalizeSourceLang(rawSource);
     const normalizedTerm = normalizeCacheTerm(rawText) || rawText.toLowerCase();
-    const cacheKey = `${sourceLang || 'AUTO'}::${targetLang}::${normalizedTerm}`;
+    const contextKey = normalizeCacheTerm(rawContext).slice(0, 600);
+    const cacheKey = `${sourceLang || 'AUTO'}::${targetLang}::${normalizedTerm}::${contextKey}`;
 
     const cached = getCachedTranslation(cacheKey);
     if (cached) {
@@ -178,6 +184,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ...cached,
         cached: true,
       });
+      return;
+    }
+
+    const { data: sharedCached, error: sharedCacheError } = await userSupabase
+      .from('translation_cache')
+      .select('translated_text, detected_source_language')
+      .eq('source_language', sourceLang || 'AUTO')
+      .eq('target_language', targetLang)
+      .eq('normalized_text', normalizedTerm)
+      .eq('context_key', contextKey)
+      .maybeSingle();
+
+    if (!sharedCacheError && sharedCached?.translated_text) {
+      const sharedEntry: CachedServerTranslation = {
+        translatedText: sharedCached.translated_text,
+        detectedSourceLanguage: sharedCached.detected_source_language || sourceLang || null,
+        targetLang,
+      };
+      setCachedTranslation(cacheKey, sharedEntry);
+      res.status(200).json({ ...sharedEntry, cached: true, cacheSource: 'supabase' });
       return;
     }
 
@@ -235,6 +261,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       targetLang,
     };
     setCachedTranslation(cacheKey, resultEntry);
+
+    // Persist the translation across serverless instances and user devices.
+    // Cache write failures must never turn a successful DeepL response into a failed request.
+    try {
+      await userSupabase.from('translation_cache').upsert(
+        {
+          source_language: sourceLang || 'AUTO',
+          target_language: targetLang,
+          normalized_text: normalizedTerm,
+          context_key: contextKey,
+          original_text: rawText.slice(0, 1500),
+          translated_text: first.text,
+          detected_source_language: first.detected_source_language || sourceLang || null,
+        },
+        {
+          onConflict: 'source_language,target_language,normalized_text,context_key',
+          ignoreDuplicates: true,
+        }
+      );
+    } catch {
+      // Keep the successful translation response even if persistence is temporarily unavailable.
+    }
 
     res.status(200).json(resultEntry);
   } catch (err) {

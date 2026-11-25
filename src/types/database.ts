@@ -11,6 +11,7 @@ export interface Profile {
   full_name: string | null;
   avatar_url: string | null;
   native_language: string;
+  interface_language: string;
   target_languages: string[];
   onboarding_completed: boolean;
   xp_points: number;

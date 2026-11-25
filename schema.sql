@@ -13,6 +13,36 @@
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- ============================================================================
+-- LANGUAGE CATALOG (canonical codes shared by UI, profiles and DeepL)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.languages (
+  code text PRIMARY KEY,
+  source_code text NOT NULL,
+  deepl_target_code text NOT NULL UNIQUE,
+  name text NOT NULL,
+  native_name text NOT NULL,
+  is_active boolean NOT NULL DEFAULT true,
+  sort_order smallint NOT NULL DEFAULT 100,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO public.languages (code,source_code,deepl_target_code,name,native_name,sort_order) VALUES
+('PT-BR','PT','PT-BR','Portuguese (Brazil)','Português',1),
+('EN-US','EN','EN-US','English (United States)','English',2),
+('ES','ES','ES','Spanish','Español',3),
+('JA','JA','JA','Japanese','日本語',4),
+('ZH','ZH','ZH','Chinese','中文',5),
+('ID','ID','ID','Indonesian','Bahasa Indonesia',6),
+('FR','FR','FR','French','Français',7),
+('DE','DE','DE','German','Deutsch',8),
+('KO','KO','KO','Korean','한국어',9),
+('IT','IT','IT','Italian','Italiano',10)
+ON CONFLICT (code) DO UPDATE SET
+  source_code=EXCLUDED.source_code, deepl_target_code=EXCLUDED.deepl_target_code,
+  name=EXCLUDED.name, native_name=EXCLUDED.native_name,
+  is_active=EXCLUDED.is_active, sort_order=EXCLUDED.sort_order;
+
+-- ============================================================================
 -- 1. PROFILES (Perfil individual: idioma nativo, idiomas de estudo, XP)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS public.profiles (
@@ -21,6 +51,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   full_name text,
   avatar_url text,
   native_language text NOT NULL DEFAULT 'PT-BR',
+  interface_language text NOT NULL DEFAULT 'PT-BR' REFERENCES public.languages(code),
   target_languages text[] NOT NULL DEFAULT '{}'::text[],
   onboarding_completed boolean NOT NULL DEFAULT false,
   xp_points integer NOT NULL DEFAULT 0 CHECK (xp_points >= 0),
@@ -31,12 +62,14 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS full_name text;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS avatar_url text;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS native_language text NOT NULL DEFAULT 'PT-BR';
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS interface_language text NOT NULL DEFAULT 'PT-BR' REFERENCES public.languages(code);
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS target_languages text[] NOT NULL DEFAULT '{}'::text[];
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS onboarding_completed boolean NOT NULL DEFAULT false;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS xp_points integer NOT NULL DEFAULT 0;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS idx_profiles_username ON public.profiles(username);
+CREATE INDEX IF NOT EXISTS idx_profiles_interface_language ON public.profiles(interface_language);
 
 -- Automatically provision a profile whenever a new auth.users account is created
 CREATE OR REPLACE FUNCTION public.handle_new_user()
@@ -309,15 +342,25 @@ CREATE TABLE IF NOT EXISTS public.translation_cache (
   source_language text NOT NULL,
   target_language text NOT NULL,
   normalized_text text NOT NULL,
+  context_key text NOT NULL DEFAULT '',
   original_text text NOT NULL,
   translated_text text NOT NULL,
   detected_source_language text,
   created_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT uq_translation_cache_lookup UNIQUE (source_language, target_language, normalized_text)
+  CONSTRAINT chk_translation_cache_text_lengths CHECK (
+    length(trim(normalized_text)) BETWEEN 1 AND 500
+    AND length(trim(original_text)) BETWEEN 1 AND 1500
+    AND length(trim(translated_text)) BETWEEN 1 AND 10000
+    AND length(context_key) <= 600
+  )
 );
 
+ALTER TABLE public.translation_cache ADD COLUMN IF NOT EXISTS context_key text NOT NULL DEFAULT '';
+ALTER TABLE public.translation_cache DROP CONSTRAINT IF EXISTS uq_translation_cache_lookup;
+ALTER TABLE public.translation_cache ADD CONSTRAINT uq_translation_cache_lookup
+  UNIQUE (source_language, target_language, normalized_text, context_key);
 CREATE INDEX IF NOT EXISTS idx_translation_cache_lookup
-  ON public.translation_cache(source_language, target_language, normalized_text);
+  ON public.translation_cache(source_language, target_language, normalized_text, context_key);
 
 -- ============================================================================
 -- 8. ROW LEVEL SECURITY (RLS) POLICIES
@@ -331,10 +374,16 @@ ALTER TABLE public.user_exam_attempts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.saved_vocabulary ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_reading_progress ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.translation_cache ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.languages ENABLE ROW LEVEL SECURITY;
 
 -- ----------------------------------------------------------------------------
 -- INDIVIDUAL DATA POLICIES (Strictly isolated by auth.uid())
 -- ----------------------------------------------------------------------------
+-- LANGUAGE CATALOG: authenticated read-only access.
+DROP POLICY IF EXISTS "Authenticated users can read active languages" ON public.languages;
+CREATE POLICY "Authenticated users can read active languages"
+  ON public.languages FOR SELECT TO authenticated USING (is_active = true);
+
 
 -- PROFILES: ALL strictly restricted to owner (auth.uid() = id)
 DROP POLICY IF EXISTS "Public profiles are viewable by everyone" ON public.profiles;
@@ -385,16 +434,13 @@ CREATE POLICY "Authenticated users can read translation cache"
   USING (true);
 
 DROP POLICY IF EXISTS "Authenticated users can insert translation cache" ON public.translation_cache;
-CREATE POLICY "Authenticated users can insert translation cache"
-  ON public.translation_cache FOR INSERT
-  TO authenticated
-  WITH CHECK (
-    length(trim(normalized_text)) > 0
-    AND length(trim(translated_text)) > 0
-    AND length(normalized_text) <= 500
-  );
 
--- ----------------------------------------------------------------------------
+
+REVOKE ALL ON public.languages FROM anon, authenticated;
+GRANT SELECT ON public.languages TO authenticated;
+REVOKE ALL ON public.translation_cache FROM anon, authenticated;
+GRANT SELECT ON public.translation_cache TO authenticated;
+
 -- GLOBAL SHARED CONTENT POLICIES (SELECT for all authenticated; write for author)
 -- ----------------------------------------------------------------------------
 

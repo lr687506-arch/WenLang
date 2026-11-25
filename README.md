@@ -14,3 +14,15 @@
    `npm run dev`
 
 This project was created by Google AI Studio!
+
+
+## Environment variables
+
+Configure the following values in the deployment environment:
+
+- `VITE_SUPABASE_URL`: Supabase project URL (browser).
+- `VITE_SUPABASE_ANON_KEY`: Supabase publishable/anon key (browser).
+- `DEEPL_API_KEY`: DeepL API key (server only).
+- `SUPABASE_SERVICE_ROLE_KEY`: Supabase service-role key (server only; required for trusted writes to the shared translation cache).
+
+Never prefix `DEEPL_API_KEY` or `SUPABASE_SERVICE_ROLE_KEY` with `VITE_`, and never expose either secret to browser code. The translation API validates the user's access token before using the server-only service-role credential to persist a translation.

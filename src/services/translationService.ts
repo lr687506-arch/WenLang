@@ -20,7 +20,7 @@ interface CachedTranslationEntry {
   lastUsedAt: number;
 }
 
-const LOCAL_CACHE_STORAGE_KEY = 'wenlang_deepl_cache_v1';
+const LOCAL_CACHE_STORAGE_KEY = 'wenlang_deepl_cache_v2';
 const MAX_LOCAL_CACHE_ENTRIES = 1000;
 const MAX_REMOTE_CACHE_TEXT_LEN = 500;
 
@@ -125,15 +125,17 @@ export function normalizeLookupTerm(term: string): string {
 function buildTranslationCacheKey(
   sourceLang: string,
   targetLang: string,
-  normalizedText: string
+  normalizedText: string,
+  contextKey: string
 ): string {
-  return `${sourceLang}::${targetLang}::${normalizedText}`;
+  return `${sourceLang}::${targetLang}::${normalizedText}::${contextKey}`;
 }
 
 async function lookupRemoteTranslationCache(
   sourceLang: string,
   targetLang: string,
-  normalizedText: string
+  normalizedText: string,
+  contextKey: string
 ): Promise<CachedTranslationEntry | null> {
   if (!remoteCacheAvailable || !normalizedText || normalizedText.length > MAX_REMOTE_CACHE_TEXT_LEN) {
     return null;
@@ -146,6 +148,7 @@ async function lookupRemoteTranslationCache(
       .eq('source_language', sourceLang)
       .eq('target_language', targetLang)
       .eq('normalized_text', normalizedText)
+      .eq('context_key', contextKey)
       .maybeSingle();
 
     if (error) {
@@ -170,45 +173,6 @@ async function lookupRemoteTranslationCache(
   }
 
   return null;
-}
-
-function saveRemoteTranslationCache(params: {
-  sourceLang: string;
-  targetLang: string;
-  normalizedText: string;
-  originalText: string;
-  translatedText: string;
-  detectedSourceLanguage?: string | null;
-}): void {
-  if (
-    !remoteCacheAvailable ||
-    !params.normalizedText ||
-    params.normalizedText.length > MAX_REMOTE_CACHE_TEXT_LEN
-  ) {
-    return;
-  }
-
-  void supabase
-    .from('translation_cache')
-    .upsert(
-      {
-        source_language: params.sourceLang,
-        target_language: params.targetLang,
-        normalized_text: params.normalizedText,
-        original_text: params.originalText.slice(0, MAX_REMOTE_CACHE_TEXT_LEN),
-        translated_text: params.translatedText,
-        detected_source_language: params.detectedSourceLanguage ?? null,
-      },
-      {
-        onConflict: 'source_language,target_language,normalized_text',
-        ignoreDuplicates: true,
-      }
-    )
-    .then(({ error }) => {
-      if (error && (isSchemaMissingError(error) || error.code === '42P01' || error.code === 'PGRST205')) {
-        remoteCacheAvailable = false;
-      }
-    });
 }
 
 /**
@@ -357,7 +321,8 @@ export async function resolveTermMeaning(params: {
     normalizeLookupTerm(cleanedSelection) || cleanedSelection.replace(/\s+/g, ' ').toLowerCase();
   const canonicalSource = normalizeLanguageCode(sourceLanguage) || 'AUTO';
   const targetLang = normalizeToDeepLTarget(targetNativeLanguage);
-  const cacheKey = buildTranslationCacheKey(canonicalSource, targetLang, normalizedKeyText);
+  const contextKey = normalizeLookupTerm(contextSentence).slice(0, 600);
+  const cacheKey = buildTranslationCacheKey(canonicalSource, targetLang, normalizedKeyText, contextKey);
 
   // Step B1: Instant Client Cache (Memory + localStorage LRU)
   const localCached = getLocalCachedTranslation(cacheKey);
@@ -391,7 +356,8 @@ export async function resolveTermMeaning(params: {
     const remoteCached = await lookupRemoteTranslationCache(
       canonicalSource,
       targetLang,
-      normalizedKeyText
+      normalizedKeyText,
+      contextKey
     );
     if (remoteCached) {
       return setLocalCachedTranslation(
@@ -436,16 +402,6 @@ export async function resolveTermMeaning(params: {
       payload.translatedText,
       payload.detectedSourceLanguage ?? canonicalSource
     );
-
-    // Fire-and-forget persistence into Supabase shared cache
-    saveRemoteTranslationCache({
-      sourceLang: canonicalSource,
-      targetLang,
-      normalizedText: normalizedKeyText,
-      originalText: cleanedSelection,
-      translatedText: payload.translatedText,
-      detectedSourceLanguage: payload.detectedSourceLanguage ?? canonicalSource,
-    });
 
     return cachedEntry;
   })();

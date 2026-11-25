@@ -428,23 +428,12 @@ CREATE POLICY "Authenticated users can read translation cache"
   USING (true);
 
 DROP POLICY IF EXISTS "Authenticated users can insert translation cache" ON public.translation_cache;
-CREATE POLICY "Authenticated users can insert translation cache"
-  ON public.translation_cache FOR INSERT
-  TO authenticated
-  WITH CHECK (
-    length(trim(normalized_text)) > 0
-    AND length(trim(translated_text)) > 0
-    AND length(normalized_text) <= 500
-    AND length(context_key) <= 600
-    AND length(original_text) <= 1500
-    AND length(translated_text) <= 10000
-  );
 
 
 REVOKE ALL ON public.languages FROM anon, authenticated;
 GRANT SELECT ON public.languages TO authenticated;
 REVOKE ALL ON public.translation_cache FROM anon, authenticated;
-GRANT SELECT, INSERT ON public.translation_cache TO authenticated;
+GRANT SELECT ON public.translation_cache TO authenticated;
 
 -- GLOBAL SHARED CONTENT POLICIES (SELECT for all authenticated; write for author)
 -- ----------------------------------------------------------------------------

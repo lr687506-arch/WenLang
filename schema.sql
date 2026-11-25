@@ -346,7 +346,13 @@ CREATE TABLE IF NOT EXISTS public.translation_cache (
   original_text text NOT NULL,
   translated_text text NOT NULL,
   detected_source_language text,
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT chk_translation_cache_text_lengths CHECK (
+    length(trim(normalized_text)) BETWEEN 1 AND 500
+    AND length(trim(original_text)) BETWEEN 1 AND 1500
+    AND length(trim(translated_text)) BETWEEN 1 AND 10000
+    AND length(context_key) <= 600
+  )
 );
 
 ALTER TABLE public.translation_cache ADD COLUMN IF NOT EXISTS context_key text NOT NULL DEFAULT '';

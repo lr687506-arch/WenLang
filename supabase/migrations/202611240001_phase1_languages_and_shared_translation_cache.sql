@@ -84,3 +84,5 @@ grant select on public.languages to authenticated;
 revoke all on public.translation_cache from anon,authenticated;
 grant select,insert on public.translation_cache to authenticated;
 notify pgrst,'reload schema';
+
+create index if not exists idx_profiles_interface_language on public.profiles(interface_language);

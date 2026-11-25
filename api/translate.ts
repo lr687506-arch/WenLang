@@ -137,6 +137,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       global: { headers: { Authorization: `Bearer ${token}` } },
       auth: { persistSession: false, autoRefreshToken: false },
     });
+    // The service-role credential is read only on the server and is never sent to clients.
+    // Cache writes are server-owned to prevent authenticated users from poisoning shared results.
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+    const cacheWriter = serviceRoleKey
+      ? createClient(supabaseUrl, serviceRoleKey, {
+          auth: { persistSession: false, autoRefreshToken: false },
+        })
+      : null;
 
     const body = (typeof req.body === 'string' ? JSON.parse(req.body) : req.body || {}) as Record<
       string,
@@ -265,24 +273,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Persist the translation across serverless instances and user devices.
     // Cache write failures must never turn a successful DeepL response into a failed request.
-    try {
-      await userSupabase.from('translation_cache').upsert(
-        {
-          source_language: sourceLang || 'AUTO',
-          target_language: targetLang,
-          normalized_text: normalizedTerm,
-          context_key: contextKey,
-          original_text: rawText.slice(0, 1500),
-          translated_text: first.text,
-          detected_source_language: first.detected_source_language || sourceLang || null,
-        },
-        {
-          onConflict: 'source_language,target_language,normalized_text,context_key',
-          ignoreDuplicates: true,
-        }
-      );
-    } catch {
-      // Keep the successful translation response even if persistence is temporarily unavailable.
+    if (cacheWriter) {
+      try {
+        await cacheWriter.from('translation_cache').upsert(
+          {
+            source_language: sourceLang || 'AUTO',
+            target_language: targetLang,
+            normalized_text: normalizedTerm,
+            context_key: contextKey,
+            original_text: rawText.slice(0, 1500),
+            translated_text: first.text,
+            detected_source_language: first.detected_source_language || sourceLang || null,
+          },
+          {
+            onConflict: 'source_language,target_language,normalized_text,context_key',
+            ignoreDuplicates: true,
+          }
+        );
+      } catch {
+        // Keep the successful translation response even if persistence is temporarily unavailable.
+      }
     }
 
     res.status(200).json(resultEntry);

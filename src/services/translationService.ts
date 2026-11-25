@@ -1,6 +1,6 @@
 import type { AuthorAnnotation } from '../types/database';
-import { supabase } from './supabaseClient';
-import { normalizeToDeepLTarget } from '../constants/languages';
+import { supabase, isSchemaMissingError } from './supabaseClient';
+import { normalizeLanguageCode, normalizeToDeepLTarget } from '../constants/languages';
 
 export interface LookupResult {
   source: 'author' | 'deepl';
@@ -11,17 +11,204 @@ export interface LookupResult {
   contextSentence?: string;
   detectedSourceLanguage?: string | null;
   annotationId?: string;
+  cached?: boolean;
+}
+
+interface CachedTranslationEntry {
+  translatedText: string;
+  detectedSourceLanguage?: string | null;
+  lastUsedAt: number;
+}
+
+const LOCAL_CACHE_STORAGE_KEY = 'wenlang_deepl_cache_v1';
+const MAX_LOCAL_CACHE_ENTRIES = 1000;
+const MAX_REMOTE_CACHE_TEXT_LEN = 500;
+
+const memoryCache = new Map<string, CachedTranslationEntry>();
+const inFlightRequests = new Map<string, Promise<CachedTranslationEntry>>();
+let localCacheHydrated = false;
+let remoteCacheAvailable = true;
+
+function hydrateLocalCacheOnce(): void {
+  if (localCacheHydrated) return;
+  localCacheHydrated = true;
+  if (typeof window === 'undefined' || !window.localStorage) return;
+
+  try {
+    const raw = window.localStorage.getItem(LOCAL_CACHE_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Record<string, CachedTranslationEntry>;
+    if (!parsed || typeof parsed !== 'object') return;
+    for (const [key, entry] of Object.entries(parsed)) {
+      if (
+        entry &&
+        typeof entry.translatedText === 'string' &&
+        entry.translatedText.trim().length > 0
+      ) {
+        memoryCache.set(key, {
+          translatedText: entry.translatedText,
+          detectedSourceLanguage: entry.detectedSourceLanguage ?? null,
+          lastUsedAt: typeof entry.lastUsedAt === 'number' ? entry.lastUsedAt : Date.now(),
+        });
+      }
+    }
+  } catch {
+    // Ignore corrupted storage or private browsing quota errors
+  }
+}
+
+function persistLocalCache(): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+
+  try {
+    // Enforce LRU cap by most recently used timestamp
+    if (memoryCache.size > MAX_LOCAL_CACHE_ENTRIES) {
+      const sorted = Array.from(memoryCache.entries()).sort(
+        (a, b) => a[1].lastUsedAt - b[1].lastUsedAt
+      );
+      const excess = memoryCache.size - MAX_LOCAL_CACHE_ENTRIES;
+      for (let i = 0; i < excess; i += 1) {
+        memoryCache.delete(sorted[i][0]);
+      }
+    }
+
+    const serialized: Record<string, CachedTranslationEntry> = {};
+    for (const [key, value] of memoryCache.entries()) {
+      serialized[key] = value;
+    }
+    window.localStorage.setItem(LOCAL_CACHE_STORAGE_KEY, JSON.stringify(serialized));
+  } catch {
+    // Ignore quota exceeded / privacy mode errors
+  }
+}
+
+function getLocalCachedTranslation(cacheKey: string): CachedTranslationEntry | null {
+  hydrateLocalCacheOnce();
+  const hit = memoryCache.get(cacheKey);
+  if (!hit) return null;
+  hit.lastUsedAt = Date.now();
+  memoryCache.set(cacheKey, hit);
+  return hit;
+}
+
+function setLocalCachedTranslation(
+  cacheKey: string,
+  translatedText: string,
+  detectedSourceLanguage?: string | null
+): CachedTranslationEntry {
+  hydrateLocalCacheOnce();
+  const entry: CachedTranslationEntry = {
+    translatedText,
+    detectedSourceLanguage: detectedSourceLanguage ?? null,
+    lastUsedAt: Date.now(),
+  };
+  memoryCache.set(cacheKey, entry);
+  persistLocalCache();
+  return entry;
 }
 
 /**
  * Strips leading/trailing punctuation across Latin and CJK scripts
- * so matching selected phrases against author_annotations is resilient.
+ * so matching selected phrases against author_annotations and translation cache is resilient.
  */
 export function normalizeLookupTerm(term: string): string {
   return term
     .trim()
-    .replace(/^[\s"'“”‘’「」『』【】《》〈〉()[\]{},.;:!?。、！？：；·—–-]+|[\s"'“”‘’「」『』【】《》〈〉()[\]{},.;:!?。、！？：；·—–-]+$/g, '')
+    .replace(
+      /^[\s"'“”‘’「」『』【】《》〈〉()[\]{},.;:!?。、！？：；·—–-]+|[\s"'“”‘’「」『』【】《》〈〉()[\]{},.;:!?。、！？：；·—–-]+$/g,
+      ''
+    )
+    .replace(/\s+/g, ' ')
     .toLowerCase();
+}
+
+function buildTranslationCacheKey(
+  sourceLang: string,
+  targetLang: string,
+  normalizedText: string
+): string {
+  return `${sourceLang}::${targetLang}::${normalizedText}`;
+}
+
+async function lookupRemoteTranslationCache(
+  sourceLang: string,
+  targetLang: string,
+  normalizedText: string
+): Promise<CachedTranslationEntry | null> {
+  if (!remoteCacheAvailable || !normalizedText || normalizedText.length > MAX_REMOTE_CACHE_TEXT_LEN) {
+    return null;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('translation_cache')
+      .select('translated_text, detected_source_language')
+      .eq('source_language', sourceLang)
+      .eq('target_language', targetLang)
+      .eq('normalized_text', normalizedText)
+      .maybeSingle();
+
+    if (error) {
+      if (isSchemaMissingError(error) || error.code === '42P01' || error.code === 'PGRST205') {
+        remoteCacheAvailable = false;
+      }
+      return null;
+    }
+
+    if (data && typeof data.translated_text === 'string' && data.translated_text.trim()) {
+      return {
+        translatedText: data.translated_text,
+        detectedSourceLanguage:
+          typeof data.detected_source_language === 'string'
+            ? data.detected_source_language
+            : null,
+        lastUsedAt: Date.now(),
+      };
+    }
+  } catch {
+    // Non-fatal: continue smoothly to DeepL API
+  }
+
+  return null;
+}
+
+function saveRemoteTranslationCache(params: {
+  sourceLang: string;
+  targetLang: string;
+  normalizedText: string;
+  originalText: string;
+  translatedText: string;
+  detectedSourceLanguage?: string | null;
+}): void {
+  if (
+    !remoteCacheAvailable ||
+    !params.normalizedText ||
+    params.normalizedText.length > MAX_REMOTE_CACHE_TEXT_LEN
+  ) {
+    return;
+  }
+
+  void supabase
+    .from('translation_cache')
+    .upsert(
+      {
+        source_language: params.sourceLang,
+        target_language: params.targetLang,
+        normalized_text: params.normalizedText,
+        original_text: params.originalText.slice(0, MAX_REMOTE_CACHE_TEXT_LEN),
+        translated_text: params.translatedText,
+        detected_source_language: params.detectedSourceLanguage ?? null,
+      },
+      {
+        onConflict: 'source_language,target_language,normalized_text',
+        ignoreDuplicates: true,
+      }
+    )
+    .then(({ error }) => {
+      if (error && (isSchemaMissingError(error) || error.code === '42P01' || error.code === 'PGRST205')) {
+        remoteCacheAvailable = false;
+      }
+    });
 }
 
 /**
@@ -78,7 +265,11 @@ export function findAuthorAnnotationMatch(
 /**
  * Extracts the surrounding sentence for DeepL contextual semantic accuracy.
  */
-export function extractContextSentence(fullText: string, selectedText: string, approxOffset?: number): string {
+export function extractContextSentence(
+  fullText: string,
+  selectedText: string,
+  approxOffset?: number
+): string {
   const cleaned = selectedText.trim();
   if (!fullText || !cleaned) return '';
 
@@ -110,9 +301,11 @@ export function extractContextSentence(fullText: string, selectedText: string, a
 }
 
 /**
- * Hybrid Lookup Engine:
- * Step A -> Checks local author_annotations first (0 DeepL API calls).
- * Step B -> Falls back to server-side /api/translate proxy using user's native_language.
+ * Hybrid Lookup Engine with Multi-Layer Caching:
+ * Step A  -> Local author_annotations (0 DeepL calls)
+ * Step B1 -> Local memory + localStorage LRU cache (0ms, 0 DeepL calls)
+ * Step B2 -> Shared Supabase translation_cache (0 DeepL calls across sessions/devices)
+ * Step B3 -> Authenticated /api/translate DeepL proxy (with server-side LRU cache), then caches result automatically
  */
 export async function resolveTermMeaning(params: {
   selectedText: string;
@@ -160,43 +353,115 @@ export async function resolveTermMeaning(params: {
     };
   }
 
-  // Step B: DeepL Fallback via authenticated backend proxy
-  const { data: sessionData } = await supabase.auth.getSession();
-  const accessToken = sessionData.session?.access_token;
-
+  const normalizedKeyText =
+    normalizeLookupTerm(cleanedSelection) || cleanedSelection.replace(/\s+/g, ' ').toLowerCase();
+  const canonicalSource = normalizeLanguageCode(sourceLanguage) || 'AUTO';
   const targetLang = normalizeToDeepLTarget(targetNativeLanguage);
+  const cacheKey = buildTranslationCacheKey(canonicalSource, targetLang, normalizedKeyText);
 
-  const response = await fetch('/api/translate', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-    },
-    body: JSON.stringify({
-      text: cleanedSelection,
-      context: contextSentence,
-      source_lang: sourceLanguage,
-      target_lang: targetLang,
-    }),
-  });
-
-  const payload = (await response.json().catch(() => ({}))) as {
-    translatedText?: string;
-    detectedSourceLanguage?: string | null;
-    error?: string;
-  };
-
-  if (!response.ok || !payload.translatedText) {
-    throw new Error(
-      payload.error || 'Não foi possível traduzir o trecho selecionado via DeepL.'
-    );
+  // Step B1: Instant Client Cache (Memory + localStorage LRU)
+  const localCached = getLocalCachedTranslation(cacheKey);
+  if (localCached) {
+    return {
+      source: 'deepl',
+      originalText: cleanedSelection,
+      translatedText: localCached.translatedText,
+      contextSentence,
+      detectedSourceLanguage: localCached.detectedSourceLanguage ?? canonicalSource,
+      cached: true,
+    };
   }
 
-  return {
-    source: 'deepl',
-    originalText: cleanedSelection,
-    translatedText: payload.translatedText,
-    contextSentence,
-    detectedSourceLanguage: payload.detectedSourceLanguage,
-  };
+  // Deduplicate concurrent clicks on the same word/expression
+  const existingFlight = inFlightRequests.get(cacheKey);
+  if (existingFlight) {
+    const flightRes = await existingFlight;
+    return {
+      source: 'deepl',
+      originalText: cleanedSelection,
+      translatedText: flightRes.translatedText,
+      contextSentence,
+      detectedSourceLanguage: flightRes.detectedSourceLanguage ?? canonicalSource,
+      cached: true,
+    };
+  }
+
+  const lookupPromise = (async (): Promise<CachedTranslationEntry> => {
+    // Step B2: Persistent Supabase translation_cache lookup
+    const remoteCached = await lookupRemoteTranslationCache(
+      canonicalSource,
+      targetLang,
+      normalizedKeyText
+    );
+    if (remoteCached) {
+      return setLocalCachedTranslation(
+        cacheKey,
+        remoteCached.translatedText,
+        remoteCached.detectedSourceLanguage
+      );
+    }
+
+    // Step B3: DeepL Fallback via authenticated backend proxy
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+
+    const response = await fetch('/api/translate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: JSON.stringify({
+        text: cleanedSelection,
+        context: contextSentence,
+        source_lang: sourceLanguage,
+        target_lang: targetLang,
+      }),
+    });
+
+    const payload = (await response.json().catch(() => ({}))) as {
+      translatedText?: string;
+      detectedSourceLanguage?: string | null;
+      error?: string;
+    };
+
+    if (!response.ok || !payload.translatedText) {
+      throw new Error(
+        payload.error || 'Não foi possível traduzir o trecho selecionado via DeepL.'
+      );
+    }
+
+    const cachedEntry = setLocalCachedTranslation(
+      cacheKey,
+      payload.translatedText,
+      payload.detectedSourceLanguage ?? canonicalSource
+    );
+
+    // Fire-and-forget persistence into Supabase shared cache
+    saveRemoteTranslationCache({
+      sourceLang: canonicalSource,
+      targetLang,
+      normalizedText: normalizedKeyText,
+      originalText: cleanedSelection,
+      translatedText: payload.translatedText,
+      detectedSourceLanguage: payload.detectedSourceLanguage ?? canonicalSource,
+    });
+
+    return cachedEntry;
+  })();
+
+  inFlightRequests.set(cacheKey, lookupPromise);
+
+  try {
+    const resolved = await lookupPromise;
+    return {
+      source: 'deepl',
+      originalText: cleanedSelection,
+      translatedText: resolved.translatedText,
+      contextSentence,
+      detectedSourceLanguage: resolved.detectedSourceLanguage ?? canonicalSource,
+    };
+  } finally {
+    inFlightRequests.delete(cacheKey);
+  }
 }

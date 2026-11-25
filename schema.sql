@@ -302,6 +302,24 @@ CREATE INDEX IF NOT EXISTS idx_user_reading_progress_user_id ON public.user_read
 CREATE INDEX IF NOT EXISTS idx_user_reading_progress_text_id ON public.user_reading_progress(text_id);
 
 -- ============================================================================
+-- 7B. TRANSLATION_CACHE (Cache Global de Traduções DeepL — Evita Chamadas Repetidas)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.translation_cache (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_language text NOT NULL,
+  target_language text NOT NULL,
+  normalized_text text NOT NULL,
+  original_text text NOT NULL,
+  translated_text text NOT NULL,
+  detected_source_language text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT uq_translation_cache_lookup UNIQUE (source_language, target_language, normalized_text)
+);
+
+CREATE INDEX IF NOT EXISTS idx_translation_cache_lookup
+  ON public.translation_cache(source_language, target_language, normalized_text);
+
+-- ============================================================================
 -- 8. ROW LEVEL SECURITY (RLS) POLICIES
 -- ============================================================================
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
@@ -312,6 +330,7 @@ ALTER TABLE public.exam_questions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_exam_attempts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.saved_vocabulary ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_reading_progress ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.translation_cache ENABLE ROW LEVEL SECURITY;
 
 -- ----------------------------------------------------------------------------
 -- INDIVIDUAL DATA POLICIES (Strictly isolated by auth.uid())
@@ -357,6 +376,23 @@ CREATE POLICY "Users manage own reading progress strictly"
   TO authenticated
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
+
+-- TRANSLATION_CACHE: Shared read/insert for authenticated users (no UPDATE/DELETE to prevent tampering)
+DROP POLICY IF EXISTS "Authenticated users can read translation cache" ON public.translation_cache;
+CREATE POLICY "Authenticated users can read translation cache"
+  ON public.translation_cache FOR SELECT
+  TO authenticated
+  USING (true);
+
+DROP POLICY IF EXISTS "Authenticated users can insert translation cache" ON public.translation_cache;
+CREATE POLICY "Authenticated users can insert translation cache"
+  ON public.translation_cache FOR INSERT
+  TO authenticated
+  WITH CHECK (
+    length(trim(normalized_text)) > 0
+    AND length(trim(translated_text)) > 0
+    AND length(normalized_text) <= 500
+  );
 
 -- ----------------------------------------------------------------------------
 -- GLOBAL SHARED CONTENT POLICIES (SELECT for all authenticated; write for author)

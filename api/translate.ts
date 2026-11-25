@@ -40,6 +40,44 @@ function normalizeSupabaseUrl(rawUrl: string | undefined): string {
   }
 }
 
+interface CachedServerTranslation {
+  translatedText: string;
+  detectedSourceLanguage: string | null;
+  targetLang: string;
+}
+
+const serverlessTranslationCache = new Map<string, CachedServerTranslation>();
+const MAX_SERVERLESS_CACHE = 1000;
+
+function normalizeCacheTerm(text: string): string {
+  return text
+    .trim()
+    .replace(
+      /^[\s"'“”‘’「」『』【】《》〈〉()[\]{},.;:!?。、！？：；·—–-]+|[\s"'“”‘’「」『』【】《》〈〉()[\]{},.;:!?。、！？：；·—–-]+$/g,
+      ''
+    )
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+function getCachedTranslation(key: string): CachedServerTranslation | null {
+  const hit = serverlessTranslationCache.get(key);
+  if (!hit) return null;
+  serverlessTranslationCache.delete(key);
+  serverlessTranslationCache.set(key, hit);
+  return hit;
+}
+
+function setCachedTranslation(key: string, entry: CachedServerTranslation): void {
+  if (serverlessTranslationCache.has(key)) {
+    serverlessTranslationCache.delete(key);
+  } else if (serverlessTranslationCache.size >= MAX_SERVERLESS_CACHE) {
+    const oldestKey = serverlessTranslationCache.keys().next().value;
+    if (oldestKey) serverlessTranslationCache.delete(oldestKey);
+  }
+  serverlessTranslationCache.set(key, entry);
+}
+
 function normalizeSourceLang(code?: string): string | undefined {
   if (!code || typeof code !== 'string') return undefined;
   const upper = code.trim().toUpperCase().split('-')[0];
@@ -131,6 +169,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const sourceLang = normalizeSourceLang(rawSource);
+    const normalizedTerm = normalizeCacheTerm(rawText) || rawText.toLowerCase();
+    const cacheKey = `${sourceLang || 'AUTO'}::${targetLang}::${normalizedTerm}`;
+
+    const cached = getCachedTranslation(cacheKey);
+    if (cached) {
+      res.status(200).json({
+        ...cached,
+        cached: true,
+      });
+      return;
+    }
+
     const deepLPayload: Record<string, unknown> = {
       text: [rawText],
       target_lang: targetLang,
@@ -179,11 +229,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
-    res.status(200).json({
+    const resultEntry: CachedServerTranslation = {
       translatedText: first.text,
       detectedSourceLanguage: first.detected_source_language || sourceLang || null,
       targetLang,
-    });
+    };
+    setCachedTranslation(cacheKey, resultEntry);
+
+    res.status(200).json(resultEntry);
   } catch (err) {
     console.error('Vercel DeepL proxy error:', err instanceof Error ? err.message : 'Unknown');
     res.status(500).json({ error: 'Falha interna ao processar tradução.' });

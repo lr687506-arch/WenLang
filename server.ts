@@ -30,6 +30,46 @@ const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 60;
 
+interface ServerTranslationCacheEntry {
+  translatedText: string;
+  detectedSourceLanguage: string | null;
+  targetLang: string;
+}
+
+// Server-side LRU cache to avoid redundant DeepL API token consumption
+const serverTranslationCache = new Map<string, ServerTranslationCacheEntry>();
+const MAX_SERVER_TRANSLATION_CACHE = 2000;
+
+function normalizeCacheTerm(text: string): string {
+  return text
+    .trim()
+    .replace(
+      /^[\s"'“”‘’「」『』【】《》〈〉()[\]{},.;:!?。、！？：；·—–-]+|[\s"'“”‘’「」『』【】《》〈〉()[\]{},.;:!?。、！？：；·—–-]+$/g,
+      ''
+    )
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+function getServerCachedTranslation(key: string): ServerTranslationCacheEntry | null {
+  const hit = serverTranslationCache.get(key);
+  if (!hit) return null;
+  // Refresh LRU order
+  serverTranslationCache.delete(key);
+  serverTranslationCache.set(key, hit);
+  return hit;
+}
+
+function setServerCachedTranslation(key: string, entry: ServerTranslationCacheEntry): void {
+  if (serverTranslationCache.has(key)) {
+    serverTranslationCache.delete(key);
+  } else if (serverTranslationCache.size >= MAX_SERVER_TRANSLATION_CACHE) {
+    const oldestKey = serverTranslationCache.keys().next().value;
+    if (oldestKey) serverTranslationCache.delete(oldestKey);
+  }
+  serverTranslationCache.set(key, entry);
+}
+
 function checkRateLimit(key: string): boolean {
   const now = Date.now();
   const entry = rateLimitMap.get(key);
@@ -195,6 +235,18 @@ async function startServer() {
       }
 
       const sourceLang = normalizeSourceLang(rawSource);
+      const normalizedTerm = normalizeCacheTerm(rawText) || rawText.toLowerCase();
+      const serverCacheKey = `${sourceLang || 'AUTO'}::${targetLang}::${normalizedTerm}`;
+
+      const cached = getServerCachedTranslation(serverCacheKey);
+      if (cached) {
+        res.json({
+          ...cached,
+          cached: true,
+        });
+        return;
+      }
+
       const deepLPayload: Record<string, unknown> = {
         text: [rawText],
         target_lang: targetLang,
@@ -241,11 +293,14 @@ async function startServer() {
         return;
       }
 
-      res.json({
+      const resultEntry: ServerTranslationCacheEntry = {
         translatedText: first.text,
         detectedSourceLanguage: first.detected_source_language || sourceLang || null,
         targetLang,
-      });
+      };
+      setServerCachedTranslation(serverCacheKey, resultEntry);
+
+      res.json(resultEntry);
     } catch (err) {
       console.error('DeepL proxy error:', err instanceof Error ? err.message : 'Unknown error');
       res.status(500).json({ error: 'Falha interna ao processar tradução.' });

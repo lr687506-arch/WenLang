@@ -69,6 +69,7 @@ ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS xp_points integer NOT NULL 
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS idx_profiles_username ON public.profiles(username);
+CREATE INDEX IF NOT EXISTS idx_profiles_interface_language ON public.profiles(interface_language);
 
 -- Automatically provision a profile whenever a new auth.users account is created
 CREATE OR REPLACE FUNCTION public.handle_new_user()

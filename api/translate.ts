@@ -94,12 +94,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const apiKey = process.env.DEEPL_API_KEY?.trim();
-    if (!apiKey) {
-      res.status(503).json({
-        error: 'Chave DEEPL_API_KEY não configurada nas variáveis de ambiente do servidor.',
-      });
-      return;
-    }
 
     const supabaseUrl = normalizeSupabaseUrl(
       process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL
@@ -204,6 +198,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       };
       setCachedTranslation(cacheKey, sharedEntry);
       res.status(200).json({ ...sharedEntry, cached: true, cacheSource: 'supabase' });
+      return;
+    }
+
+    if (!apiKey) {
+      res.status(503).json({
+        error: 'Chave DEEPL_API_KEY não configurada nas variáveis de ambiente do servidor.',
+      });
       return;
     }
 

@@ -73,10 +73,14 @@ create policy "Authenticated users can read active languages" on public.language
 drop policy if exists "Authenticated users can read translation cache" on public.translation_cache;
 create policy "Authenticated users can read translation cache" on public.translation_cache for select to authenticated using (true);
 drop policy if exists "Authenticated users can insert translation cache" on public.translation_cache;
+create policy "Authenticated users can insert translation cache" on public.translation_cache for insert to authenticated with check (
+  length(trim(normalized_text)) between 1 and 500
+  and length(trim(original_text)) between 1 and 1500
+  and length(trim(translated_text)) between 1 and 10000
+  and length(context_key) <= 600
+);
 revoke all on public.languages from anon,authenticated;
 grant select on public.languages to authenticated;
 revoke all on public.translation_cache from anon,authenticated;
-grant select on public.translation_cache to authenticated;
+grant select,insert on public.translation_cache to authenticated;
 notify pgrst,'reload schema';
-
-create index if not exists idx_profiles_interface_language on public.profiles(interface_language);

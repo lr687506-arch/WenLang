@@ -31,6 +31,7 @@ function WenLangShell() {
   const [activeTextId, setActiveTextId] = useState<string | null>(null);
   const [activeExam, setActiveExam] = useState<{ examId: string; textId: string } | null>(null);
   const [publishPresetLang, setPublishPresetLang] = useState<string | undefined>(undefined);
+  const [editingTextId, setEditingTextId] = useState<string | undefined>(undefined);
 
   if (loading) {
     return (
@@ -119,6 +120,7 @@ function WenLangShell() {
   };
 
   const handleNavigatePublish = (langCode?: string) => {
+    setEditingTextId(undefined);
     setPublishPresetLang(langCode);
     setRoute('publish');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -161,6 +163,7 @@ function WenLangShell() {
 
         {route === 'publish' && (
           <PublishPage
+            textId={editingTextId}
             initialLanguage={publishPresetLang}
             onPublished={(newTextId) => handleOpenText(newTextId)}
             onCancel={() => handleNavigate('feed')}
@@ -188,6 +191,7 @@ function WenLangShell() {
             theme={theme}
             onToggleTheme={toggleTheme}
             onOpenText={handleOpenText}
+            onEditText={(textId) => { setEditingTextId(textId); setPublishPresetLang(undefined); setRoute('publish'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
           />
         )}
       </main>

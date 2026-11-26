@@ -20,15 +20,17 @@ import {
   Award,
   BookOpen,
   ExternalLink,
+  Pencil,
 } from 'lucide-react';
 
 interface ProfilePageProps {
   theme: ThemeMode;
   onToggleTheme: () => void;
   onOpenText: (textId: string) => void;
+  onEditText: (textId: string) => void;
 }
 
-export function ProfilePage({ theme, onToggleTheme, onOpenText }: ProfilePageProps) {
+export function ProfilePage({ theme, onToggleTheme, onOpenText, onEditText }: ProfilePageProps) {
   const { user, profile, updateProfile, signOut } = useAuth();
 
   const [username, setUsername] = useState(profile?.username || '');
@@ -376,14 +378,14 @@ export function ProfilePage({ theme, onToggleTheme, onOpenText }: ProfilePagePro
                         {t.language} · {t.difficulty_level} · {t.is_public ? 'Público' : 'Privado'}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => onOpenText(t.id)}
-                      aria-label={`Abrir ${t.title}`}
-                      className="p-1.5 text-slate-400 hover:text-orange-600 dark:hover:text-orange-400 shrink-0"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button type="button" onClick={() => onEditText(t.id)} aria-label={`Editar ${t.title}`} title="Editar publicação" className="p-2 text-slate-400 hover:text-orange-600 rounded-lg hover:bg-orange-50 transition-colors">
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button type="button" onClick={() => onOpenText(t.id)} aria-label={`Abrir ${t.title}`} title="Abrir publicação" className="p-2 text-slate-400 hover:text-orange-600 rounded-lg hover:bg-orange-50 transition-colors">
+                        <ExternalLink className="w-4 h-4" />
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>

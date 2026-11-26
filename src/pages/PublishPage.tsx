@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   supabase,
   uploadAudioFile,
@@ -10,6 +10,7 @@ import {
   ANNOTATION_LEVELS_SENTINEL,
   encodeFullTranslationMeta,
   encodeAnnotationLevelsMap,
+  splitAnnotationsAndMetadata,
 } from '../services/textMetadataCodec';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -37,6 +38,7 @@ import {
 } from 'lucide-react';
 
 interface PublishPageProps {
+  textId?: string;
   initialLanguage?: string;
   onPublished: (textId: string) => void;
   onCancel: () => void;
@@ -60,7 +62,7 @@ interface DraftQuestion {
   explanation: string;
 }
 
-export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishPageProps) {
+export function PublishPage({ textId, initialLanguage, onPublished, onCancel }: PublishPageProps) {
   const { user, profile } = useAuth();
   const contentRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -78,6 +80,9 @@ export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishP
   const [translatedTitle, setTranslatedTitle] = useState('');
   const [translatedContent, setTranslatedContent] = useState('');
   const [isPublic, setIsPublic] = useState(true);
+  const [existingCoverUrl, setExistingCoverUrl] = useState<string | null>(null);
+  const [existingAudioUrl, setExistingAudioUrl] = useState<string | null>(null);
+  const [loadingDraft, setLoadingDraft] = useState(Boolean(textId));
 
   // Cover media
   const [coverUrl, setCoverUrl] = useState<string>(CURATED_EDITORIAL_COVERS[0].url);
@@ -116,6 +121,40 @@ export function PublishPage({ initialLanguage, onPublished, onCancel }: PublishP
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!textId || !user) return;
+    let active = true;
+    const loadDraft = async () => {
+      setLoadingDraft(true);
+      const [textResult, annotationResult] = await Promise.all([
+        supabase.from('texts').select('*').eq('id', textId).eq('author_id', user.id).single(),
+        supabase.from('author_annotations').select('*').eq('text_id', textId),
+      ]);
+      if (!active) return;
+      if (textResult.error || !textResult.data) { setError(textResult.error?.message || 'Publicação não encontrada.'); setLoadingDraft(false); return; }
+      if (annotationResult.error) { setError(annotationResult.error.message); setLoadingDraft(false); return; }
+      const row = textResult.data as Record<string, any>;
+      const metadata = splitAnnotationsAndMetadata((annotationResult.data || []) as any[]);
+      setTitle(row.title || ''); setContent(row.content || '');
+      setLanguage(normalizeLanguageCode(row.language || 'ES'));
+      const levels = (row.difficulty_level || '').split(',').map((v: string) => v.trim()).filter(Boolean);
+      setSelectedLevels(levels.length ? levels : [getLevelsForLanguage(row.language || 'ES').levels[0]]);
+      setTranslatedTitle(row.translated_title || metadata.fallbackTranslation?.title || '');
+      setTranslatedContent(row.translated_content || metadata.fallbackTranslation?.content || '');
+      setIsPublic(Boolean(row.is_public));
+      setExistingCoverUrl(row.cover_image_url || null); setExistingAudioUrl(row.audio_url || null);
+      setCoverUrl(row.cover_image_url || '');
+      setAnnotations(metadata.visibleAnnotations.map((ann: any) => ({
+        id: ann.id || crypto.randomUUID(), term_or_phrase: ann.term_or_phrase || '',
+        start_index: ann.start_index ?? null, end_index: ann.end_index ?? null,
+        difficulty_level: ann.difficulty_level || getLevelsForLanguage(row.language || 'ES').levels[0],
+        explanation: ann.explanation || '', pronunciation: ann.pronunciation || '',
+      })));
+      setLoadingDraft(false);
+    };
+    void loadDraft();
+    return () => { active = false; };
+  }, [textId, user?.id]);
   const levelConfig = getLevelsForLanguage(language);
   const formattedDifficulty = formatDifficultyLevels(selectedLevels, language);
 

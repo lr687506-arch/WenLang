@@ -106,6 +106,7 @@ function WenLangShell() {
   }
 
   const handleNavigate = (nextRoute: AppRoute) => {
+    setEditingTextId(undefined);
     if (nextRoute !== 'publish') {
       setPublishPresetLang(undefined);
     }

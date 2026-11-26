@@ -371,9 +371,6 @@ export function PublishPage({ textId, initialLanguage, onPublished, onCancel }: 
         const { error: clearError } = await supabase.from('author_annotations').delete().eq('text_id', textId);
         if (clearError) throw new Error(clearError.message);
       } else {
-        let createdText: { id: string } | null = null;
-        let storedTranslationInFallback = false;
-  
         if (hasFullTranslation) {
           // Attempt 1: save directly into native Supabase translation columns
           const fullPayload: Record<string, unknown> = {

@@ -361,7 +361,7 @@ export function PublishPage({ textId, initialLanguage, onPublished, onCancel }: 
         setStatusMessage('Atualizando publicação...');
         const { error: updateError } = await supabase.from('texts').update({
           ...coreTextPayload,
-          cover_image_url: coverFile ? finalCoverUrl : existingCoverUrl,
+          cover_image_url: coverUrl.trim() ? finalCoverUrl : (coverFile ? finalCoverUrl : null),
           audio_url: audioFile ? finalAudioUrl : existingAudioUrl,
           translated_title: trimmedTranslatedTitle || null,
           translated_content: trimmedTranslatedContent || null,

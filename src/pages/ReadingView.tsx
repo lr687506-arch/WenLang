@@ -218,6 +218,8 @@ export function ReadingView({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [generatingAudio, setGeneratingAudio] = useState(false);
+  const [audioGenerationError, setAudioGenerationError] = useState<string | null>(null);
 
   // Contextual Popover / Bottom Sheet state
   const [popover, setPopover] = useState<PopoverState | null>(null);
@@ -563,6 +565,24 @@ export function ReadingView({
     audio.currentTime = Math.max(0, Math.min(duration || 0, audio.currentTime + delta));
   };
 
+  const handleGenerateAudio = async () => {
+    if (!textItem || generatingAudio) return;
+    setGeneratingAudio(true);
+    setAudioGenerationError(null);
+    try {
+      const { data, error: invokeError } = await supabase.functions.invoke('generate-text-audio', {
+        body: { textId: textItem.id },
+      });
+      if (invokeError) throw new Error(invokeError.message || 'Não foi possível solicitar a narração.');
+      if (!data?.audio_url) throw new Error(data?.error || 'A narração não retornou um endereço de áudio válido.');
+      setTextItem((current) => current ? { ...current, audio_url: data.audio_url } : current);
+    } catch (err) {
+      setAudioGenerationError(err instanceof Error ? err.message : 'Falha ao gerar narração.');
+    } finally {
+      setGeneratingAudio(false);
+    }
+  };
+
   const cycleRate = () => {
     const rates = [0.75, 1, 1.25, 1.5];
     const next = rates[(rates.indexOf(playbackRate) + 1) % rates.length];
@@ -825,6 +845,24 @@ export function ReadingView({
                 referrerPolicy="no-referrer"
                 className="w-full h-full object-cover"
               />
+            </div>
+          )}
+
+          {/* On-demand TTS generation. Existing audio remains compatible with manual uploads. */}
+          {(!audioSafe || !textItem.audio_url) && (
+            <div className="mt-6 p-4 rounded-xl bg-white dark:bg-[#131926] border border-slate-200 dark:border-slate-800">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Ouvir este texto</p>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Gere uma narração automática e salve-a para as próximas leituras.</p>
+                </div>
+                <button type="button" onClick={handleGenerateAudio} disabled={generatingAudio}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-sm font-semibold transition-colors">
+                  {generatingAudio ? <Loader2 className="w-4 h-4 animate-spin" /> : <Volume2 className="w-4 h-4" />}
+                  <span>{generatingAudio ? 'Gerando narração...' : 'Gerar narração'}</span>
+                </button>
+              </div>
+              {audioGenerationError && <p role="alert" className="mt-3 text-xs text-red-600 dark:text-red-400">{audioGenerationError}</p>}
             </div>
           )}
 

@@ -355,83 +355,101 @@ export function PublishPage({ textId, initialLanguage, onPublished, onCancel }: 
               /could not find.*column|column .* does not exist/i.test(err.message || ''))
         );
 
-      let createdText: { id: string } | null = null;
+      let createdText: { id: string } | null = textId ? { id: textId } : null;
       let storedTranslationInFallback = false;
-
-      if (hasFullTranslation) {
-        // Attempt 1: save directly into native Supabase translation columns
-        const fullPayload: Record<string, unknown> = {
+      if (textId) {
+        setStatusMessage('Atualizando publicação...');
+        const { error: updateError } = await supabase.from('texts').update({
           ...coreTextPayload,
-          ...(trimmedTranslatedTitle ? { translated_title: trimmedTranslatedTitle } : {}),
-          ...(trimmedTranslatedContent ? { translated_content: trimmedTranslatedContent } : {}),
+          cover_image_url: coverFile ? finalCoverUrl : existingCoverUrl,
+          audio_url: audioFile ? finalAudioUrl : existingAudioUrl,
+          translated_title: trimmedTranslatedTitle || null,
+          translated_content: trimmedTranslatedContent || null,
           translation_language: translationLang,
-        };
-
-        const firstTry = await supabase
-          .from('texts')
-          .insert(fullPayload)
-          .select('id')
-          .single();
-
-        if (!firstTry.error && firstTry.data) {
-          createdText = firstTry.data as { id: string };
-        } else if (isMissingColumnErr(firstTry.error)) {
-          // Attempt 2: retry omitting translation_language in case only title/content columns exist
-          const msg = firstTry.error?.message || '';
-          const onlyMissingLang =
-            /translation_language/i.test(msg) &&
-            !/translated_title|translated_content/i.test(msg);
-
-          if (onlyMissingLang) {
-            const noLangPayload: Record<string, unknown> = {
-              ...coreTextPayload,
-              ...(trimmedTranslatedTitle ? { translated_title: trimmedTranslatedTitle } : {}),
-              ...(trimmedTranslatedContent ? { translated_content: trimmedTranslatedContent } : {}),
-            };
-            const secondTry = await supabase
-              .from('texts')
-              .insert(noLangPayload)
-              .select('id')
-              .single();
-
-            if (!secondTry.error && secondTry.data) {
-              createdText = secondTry.data as { id: string };
-            } else if (!isMissingColumnErr(secondTry.error)) {
-              throw new Error(secondTry.error?.message || 'Falha ao salvar texto.');
+        }).eq('id', textId).eq('author_id', user.id);
+        if (updateError) throw new Error(updateError.message);
+        const { error: clearError } = await supabase.from('author_annotations').delete().eq('text_id', textId);
+        if (clearError) throw new Error(clearError.message);
+      } else {
+        let createdText: { id: string } | null = null;
+        let storedTranslationInFallback = false;
+  
+        if (hasFullTranslation) {
+          // Attempt 1: save directly into native Supabase translation columns
+          const fullPayload: Record<string, unknown> = {
+            ...coreTextPayload,
+            ...(trimmedTranslatedTitle ? { translated_title: trimmedTranslatedTitle } : {}),
+            ...(trimmedTranslatedContent ? { translated_content: trimmedTranslatedContent } : {}),
+            translation_language: translationLang,
+          };
+  
+          const firstTry = await supabase
+            .from('texts')
+            .insert(fullPayload)
+            .select('id')
+            .single();
+  
+          if (!firstTry.error && firstTry.data) {
+            createdText = firstTry.data as { id: string };
+          } else if (isMissingColumnErr(firstTry.error)) {
+            // Attempt 2: retry omitting translation_language in case only title/content columns exist
+            const msg = firstTry.error?.message || '';
+            const onlyMissingLang =
+              /translation_language/i.test(msg) &&
+              !/translated_title|translated_content/i.test(msg);
+  
+            if (onlyMissingLang) {
+              const noLangPayload: Record<string, unknown> = {
+                ...coreTextPayload,
+                ...(trimmedTranslatedTitle ? { translated_title: trimmedTranslatedTitle } : {}),
+                ...(trimmedTranslatedContent ? { translated_content: trimmedTranslatedContent } : {}),
+              };
+              const secondTry = await supabase
+                .from('texts')
+                .insert(noLangPayload)
+                .select('id')
+                .single();
+  
+              if (!secondTry.error && secondTry.data) {
+                createdText = secondTry.data as { id: string };
+              } else if (!isMissingColumnErr(secondTry.error)) {
+                throw new Error(secondTry.error?.message || 'Falha ao salvar texto.');
+              }
             }
-          }
-
-          // Attempt 3: insert core text columns and persist full translation in fallback metadata
-          if (!createdText) {
-            const coreTry = await supabase
-              .from('texts')
-              .insert(coreTextPayload)
-              .select('id')
-              .single();
-
-            if (coreTry.error || !coreTry.data) {
-              throw new Error(coreTry.error?.message || 'Falha ao salvar texto.');
+  
+            // Attempt 3: insert core text columns and persist full translation in fallback metadata
+            if (!createdText) {
+              const coreTry = await supabase
+                .from('texts')
+                .insert(coreTextPayload)
+                .select('id')
+                .single();
+  
+              if (coreTry.error || !coreTry.data) {
+                throw new Error(coreTry.error?.message || 'Falha ao salvar texto.');
+              }
+              createdText = coreTry.data as { id: string };
+              storedTranslationInFallback = true;
             }
-            createdText = coreTry.data as { id: string };
-            storedTranslationInFallback = true;
+          } else {
+            throw new Error(firstTry.error?.message || 'Falha ao salvar texto.');
           }
         } else {
-          throw new Error(firstTry.error?.message || 'Falha ao salvar texto.');
+          const coreTry = await supabase
+            .from('texts')
+            .insert(coreTextPayload)
+            .select('id')
+            .single();
+  
+          if (coreTry.error || !coreTry.data) {
+            throw new Error(coreTry.error?.message || 'Falha ao salvar texto.');
+          }
+          createdText = coreTry.data as { id: string };
         }
-      } else {
-        const coreTry = await supabase
-          .from('texts')
-          .insert(coreTextPayload)
-          .select('id')
-          .single();
-
-        if (coreTry.error || !coreTry.data) {
-          throw new Error(coreTry.error?.message || 'Falha ao salvar texto.');
-        }
-        createdText = coreTry.data as { id: string };
+  
+  
       }
-
-      const newTextId = createdText.id;
+      const newTextId = createdText!.id;
 
       // Persist full translation via fallback metadata row if native columns were not present yet
       if (storedTranslationInFallback && hasFullTranslation) {
@@ -555,6 +573,7 @@ export function PublishPage({ textId, initialLanguage, onPublished, onCancel }: 
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 pb-28 md:pb-16">
+      {loadingDraft && <div className="mb-4 flex items-center gap-2 text-sm text-slate-500"><Loader2 className="w-4 h-4 animate-spin" /> Carregando publicação...</div>}
       <div className="pb-6 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
@@ -1245,7 +1264,7 @@ export function PublishPage({ textId, initialLanguage, onPublished, onCancel }: 
               className="px-6 py-2.5 text-sm font-semibold text-white bg-orange-600 hover:bg-orange-700 rounded-lg transition-colors inline-flex items-center gap-2 min-h-[44px] disabled:opacity-60"
             >
               {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-              <span>{submitting ? 'Publicando...' : 'Publicar texto'}</span>
+              <span>{submitting ? (textId ? 'Salvando...' : 'Publicando...') : (textId ? 'Salvar alterações' : 'Publicar texto')}</span>
             </button>
           </div>
         </div>

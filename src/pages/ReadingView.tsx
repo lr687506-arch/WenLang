@@ -58,6 +58,8 @@ interface PopoverState {
   result: LookupResult | null;
   saved: boolean;
   saving: boolean;
+  selectionStartIndex?: number | null;
+  selectionEndIndex?: number | null;
 }
 
 const FONT_SIZES = [
@@ -226,6 +228,9 @@ export function ReadingView({
   const [playbackRate, setPlaybackRate] = useState(1);
   const [generatingAudio, setGeneratingAudio] = useState(false);
   const [audioGenerationError, setAudioGenerationError] = useState<string | null>(null);
+  const [aligningAudio, setAligningAudio] = useState(false);
+  const [alignmentError, setAlignmentError] = useState<string | null>(null);
+  const segmentEndRef = useRef<number | null>(null);
 
   // Native browser/device text-to-speech (does not create or store an audio file)
   const [speechVoices, setSpeechVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -244,6 +249,15 @@ export function ReadingView({
     [textItem?.content]
   );
   const selectedSpeechVoice = speechVoices.find((voice) => voice.voiceURI === selectedVoiceURI) || null;
+  const wordTimestamps = useMemo(
+    () => (Array.isArray(textItem?.audio_timestamps) ? textItem.audio_timestamps.filter((entry) => Number.isInteger(entry.wordIndex) && Number.isFinite(entry.startSeconds) && Number.isFinite(entry.endSeconds)) : []),
+    [textItem?.audio_timestamps]
+  );
+  const activeWordIndex = useMemo(() => {
+    if (!isPlaying) return -1;
+    const active = wordTimestamps.find((entry) => currentTime >= entry.startSeconds && currentTime <= (entry.endSeconds ?? entry.startSeconds));
+    return active?.wordIndex ?? -1;
+  }, [wordTimestamps, currentTime, isPlaying]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
@@ -519,6 +533,8 @@ export function ReadingView({
         result: null,
         saved: false,
         saving: false,
+        selectionStartIndex: startIndex ?? null,
+        selectionEndIndex: endIndex ?? null,
       });
 
       try {
@@ -629,6 +645,59 @@ export function ReadingView({
       wordGlobalStart,
       wordGlobalStart + word.length
     );
+  };
+
+  const speakSelectedText = (value: string) => {
+    if (!value.trim() || typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      setNativeSpeechError('A síntese de voz não está disponível neste navegador.');
+      return;
+    }
+    window.speechSynthesis.cancel();
+    nativeActiveRef.current = false;
+    nativeParagraphIndexRef.current = 0;
+    setNativeSpeaking(false);
+    setNativePaused(false);
+    segmentEndRef.current = null;
+    if (audioRef.current && !audioRef.current.paused) audioRef.current.pause();
+    const utterance = new SpeechSynthesisUtterance(value.trim());
+    utterance.lang = nativeLocale;
+    utterance.rate = nativeRate;
+    if (selectedSpeechVoice) utterance.voice = selectedSpeechVoice;
+    utterance.onstart = () => setNativeSpeaking(true);
+    utterance.onend = () => setNativeSpeaking(false);
+    utterance.onerror = () => setNativeSpeaking(false);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const playOriginalWord = (timestamp: { startSeconds: number; endSeconds?: number }) => {
+    const audio = audioRef.current;
+    if (!audio || !Number.isFinite(timestamp.startSeconds) || !Number.isFinite(timestamp.endSeconds)) return;
+    window.speechSynthesis?.cancel();
+    nativeActiveRef.current = false;
+    setNativeSpeaking(false);
+    setNativePaused(false);
+    const start = Math.max(0, timestamp.startSeconds - 0.06);
+    segmentEndRef.current = Math.min(duration || timestamp.endSeconds!, timestamp.endSeconds! + 0.08);
+    audio.currentTime = start;
+    audio.play().catch(() => { segmentEndRef.current = null; });
+  };
+
+  const handleAlignAudio = async () => {
+    if (!textItem || !user || aligningAudio || !textItem.audio_url) return;
+    setAligningAudio(true);
+    setAlignmentError(null);
+    try {
+      const { data, error: invokeError } = await supabase.functions.invoke('align-text-audio', {
+        body: { textId: textItem.id },
+      });
+      if (invokeError) throw new Error(invokeError.message || 'Não foi possível iniciar a sincronização.');
+      if (!Array.isArray(data?.audio_timestamps)) throw new Error(data?.error || 'O serviço não retornou os tempos das palavras.');
+      setTextItem((current) => current ? { ...current, audio_timestamps: data.audio_timestamps } : current);
+    } catch (err) {
+      setAlignmentError(err instanceof Error ? err.message : 'Falha ao sincronizar o áudio.');
+    } finally {
+      setAligningAudio(false);
+    }
   };
 
   const handleSaveVocabulary = async () => {
@@ -1031,8 +1100,15 @@ export function ReadingView({
                 preload="metadata"
                 onPlay={() => setIsPlaying(true)}
                 onPause={() => setIsPlaying(false)}
-                onEnded={() => setIsPlaying(false)}
-                onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+                onEnded={() => { segmentEndRef.current = null; setIsPlaying(false); }}
+                onTimeUpdate={(e) => {
+                  const nextTime = e.currentTarget.currentTime;
+                  setCurrentTime(nextTime);
+                  if (segmentEndRef.current !== null && nextTime >= segmentEndRef.current) {
+                    segmentEndRef.current = null;
+                    e.currentTarget.pause();
+                  }
+                }}
                 onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
               />
 
@@ -1099,6 +1175,18 @@ export function ReadingView({
                   {playbackRate}x
                 </button>
               </div>
+            </div>
+          )}
+
+          {audioSafe && textItem.audio_url && isOwner && wordTimestamps.length === 0 && (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <span>O áudio ainda não possui alinhamento por palavra.</span>
+              <button type="button" onClick={handleAlignAudio} disabled={aligningAudio}
+                className="inline-flex items-center gap-2 rounded-lg border border-orange-200 dark:border-orange-900 px-3 py-2 font-semibold text-orange-700 dark:text-orange-300 disabled:opacity-60">
+                {aligningAudio ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Volume2 className="w-3.5 h-3.5" />}
+                {aligningAudio ? 'Sincronizando...' : 'Preparar áudio por palavra'}
+              </button>
+              {alignmentError && <p role="alert" className="w-full text-red-600 dark:text-red-400">{alignmentError}</p>}
             </div>
           )}
 
@@ -1219,7 +1307,7 @@ export function ReadingView({
                             <span
                               key={tIdx}
                               onClick={(e) => handleWordClick(e, token, tokenStart)}
-                              className="hover:bg-orange-500/10 dark:hover:bg-orange-400/15 rounded-xs cursor-pointer transition-colors"
+                              className={`hover:bg-orange-500/10 dark:hover:bg-orange-400/15 rounded-xs cursor-pointer transition-colors ${wordTimestamps.some((entry) => entry.startIndex === tokenStart && entry.endIndex === tokenStart + token.length && entry.wordIndex === activeWordIndex) ? 'bg-orange-200/80 dark:bg-orange-900/60 underline decoration-orange-500' : ''}`}
                             >
                               {token}
                             </span>
@@ -1414,6 +1502,20 @@ export function ReadingView({
               className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0"
             >
               <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            {popover.selectionStartIndex !== null && popover.selectionStartIndex !== undefined && wordTimestamps.find((entry) => entry.startIndex === popover.selectionStartIndex && entry.endIndex === popover.selectionEndIndex) && audioSafe && (
+              <button type="button" onClick={() => {
+                const match = wordTimestamps.find((entry) => entry.startIndex === popover.selectionStartIndex && entry.endIndex === popover.selectionEndIndex);
+                if (match) playOriginalWord(match);
+              }} className="inline-flex items-center gap-1.5 rounded-lg bg-orange-600 px-3 py-2 text-xs font-semibold text-white hover:bg-orange-700">
+                <Play className="w-3.5 h-3.5" /> Ouvir áudio original
+              </button>
+            )}
+            <button type="button" onClick={() => speakSelectedText(popover.selectedText)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800">
+              <Volume2 className="w-3.5 h-3.5" /> Ouvir com TTS
             </button>
           </div>
 

@@ -3,6 +3,11 @@ export interface AudioTimestamp {
   startSeconds: number;
   endSeconds?: number;
   label?: string;
+  /** Word-level alignment metadata; absent on legacy paragraph timestamps. */
+  wordIndex?: number;
+  startIndex?: number;
+  endIndex?: number;
+  word?: string;
 }
 
 export interface Profile {

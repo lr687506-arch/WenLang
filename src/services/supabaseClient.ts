@@ -107,7 +107,7 @@ export async function uploadAudioFile(file: File, userId: string): Promise<strin
 
   const ext = (file.name.split('.').pop() || '').toLowerCase();
   if (!ALLOWED_AUDIO_EXTENSIONS.has(ext)) {
-    throw new Error('Formato de áudio inválido. Envie .mp3, .wav, .ogg ou .m4a.');
+    throw new Error('Formato de áudio inválido. Envie .mp3, .wav, .ogg, .m4a ou .aac.');
   }
 
   const objectPath = `${userId}/${crypto.randomUUID()}.${ext}`;

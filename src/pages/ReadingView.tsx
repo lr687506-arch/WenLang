@@ -32,6 +32,7 @@ import {
   Moon,
   Trash2,
   CheckCircle2,
+  StopCircle,
 } from 'lucide-react';
 
 interface ReadingViewProps {
@@ -65,6 +66,11 @@ const FONT_SIZES = [
   { id: 'lg', label: 'G', className: 'text-[22px] leading-[1.9]' },
   { id: 'xl', label: 'XG', className: 'text-[26px] leading-[1.95]' },
 ];
+
+const SPEECH_LOCALES: Record<string, string> = {
+  'PT-BR': 'pt-BR', 'EN-US': 'en-US', ES: 'es-ES', JA: 'ja-JP',
+  ZH: 'zh-CN', ID: 'id-ID', FR: 'fr-FR', DE: 'de-DE', KO: 'ko-KR', IT: 'it-IT',
+};
 
 function formatTime(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return '00:00';
@@ -220,6 +226,107 @@ export function ReadingView({
   const [playbackRate, setPlaybackRate] = useState(1);
   const [generatingAudio, setGeneratingAudio] = useState(false);
   const [audioGenerationError, setAudioGenerationError] = useState<string | null>(null);
+
+  // Native browser/device text-to-speech (does not create or store an audio file)
+  const [speechVoices, setSpeechVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoiceURI, setSelectedVoiceURI] = useState('');
+  const [nativeRate, setNativeRate] = useState(1);
+  const [nativeSpeaking, setNativeSpeaking] = useState(false);
+  const [nativePaused, setNativePaused] = useState(false);
+  const [nativeSpeechError, setNativeSpeechError] = useState<string | null>(null);
+  const nativeParagraphIndexRef = useRef(0);
+  const nativeActiveRef = useRef(false);
+
+
+  const nativeLocale = SPEECH_LOCALES[(textItem?.language || '').toUpperCase()] || textItem?.language || 'pt-BR';
+  const nativeParagraphs = useMemo(
+    () => (textItem?.content || '').split(/\n+/).map((part) => part.trim()).filter(Boolean),
+    [textItem?.content]
+  );
+  const selectedSpeechVoice = speechVoices.find((voice) => voice.voiceURI === selectedVoiceURI) || null;
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    const loadVoices = () => {
+      const available = window.speechSynthesis.getVoices();
+      setSpeechVoices(available);
+      setSelectedVoiceURI((current) => {
+        if (current && available.some((voice) => voice.voiceURI === current)) return current;
+        const matching = available.find((voice) => voice.lang.toLowerCase() === nativeLocale.toLowerCase())
+          || available.find((voice) => voice.lang.toLowerCase().startsWith(nativeLocale.slice(0, 2).toLowerCase()));
+        return matching?.voiceURI || '';
+      });
+    };
+    loadVoices();
+    window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
+    return () => window.speechSynthesis.removeEventListener('voiceschanged', loadVoices);
+  }, [nativeLocale]);
+
+  const stopNativeSpeech = useCallback(() => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+    nativeActiveRef.current = false;
+    nativeParagraphIndexRef.current = 0;
+    setNativeSpeaking(false);
+    setNativePaused(false);
+  }, []);
+
+  const speakNativeParagraph = useCallback((index: number) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      setNativeSpeechError('Este navegador não oferece suporte à síntese de voz.');
+      return;
+    }
+    if (index >= nativeParagraphs.length) {
+      nativeActiveRef.current = false;
+      setNativeSpeaking(false);
+      setNativePaused(false);
+      nativeParagraphIndexRef.current = 0;
+      return;
+    }
+    const utterance = new SpeechSynthesisUtterance(nativeParagraphs[index]);
+    utterance.lang = nativeLocale;
+    utterance.rate = nativeRate;
+    if (selectedSpeechVoice) utterance.voice = selectedSpeechVoice;
+    utterance.onstart = () => { setNativeSpeaking(true); setNativePaused(false); };
+    utterance.onend = () => {
+      if (!nativeActiveRef.current) return;
+      nativeParagraphIndexRef.current = index + 1;
+      speakNativeParagraph(index + 1);
+    };
+    utterance.onerror = (event) => {
+      if (event.error === 'canceled' || event.error === 'interrupted') return;
+      nativeActiveRef.current = false;
+      setNativeSpeaking(false);
+      setNativePaused(false);
+      setNativeSpeechError('Não foi possível reproduzir a voz selecionada neste dispositivo.');
+    };
+    window.speechSynthesis.speak(utterance);
+  }, [nativeParagraphs, nativeLocale, nativeRate, selectedSpeechVoice]);
+
+  const toggleNativeSpeech = () => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      setNativeSpeechError('Seu navegador não oferece suporte ao TTS nativo.');
+      return;
+    }
+    setNativeSpeechError(null);
+    if (window.speechSynthesis.speaking && !window.speechSynthesis.paused) {
+      window.speechSynthesis.pause();
+      setNativePaused(true);
+      return;
+    }
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+      setNativePaused(false);
+      return;
+    }
+    nativeActiveRef.current = true;
+    nativeParagraphIndexRef.current = 0;
+    speakNativeParagraph(0);
+  };
+
+  useEffect(() => () => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+    nativeActiveRef.current = false;
+  }, [textId]);
 
   // Contextual Popover / Bottom Sheet state
   const [popover, setPopover] = useState<PopoverState | null>(null);
@@ -846,6 +953,55 @@ export function ReadingView({
                 className="w-full h-full object-cover"
               />
             </div>
+          )}
+
+
+          {/* Native TTS: uses device voices and does not create an audio file. */}
+          {(!audioSafe || !textItem.audio_url) && (
+            <section className="mt-6 p-4 rounded-xl bg-white dark:bg-[#131926] border border-slate-200 dark:border-slate-800">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Leitura em voz alta</p>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Usa a voz instalada no navegador ou dispositivo. Funciona offline quando a voz está disponível localmente.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={toggleNativeSpeech} disabled={!nativeParagraphs.length}
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white text-sm font-semibold">
+                    {nativeSpeaking && !nativePaused ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                    <span>{nativeSpeaking && !nativePaused ? 'Pausar' : nativePaused ? 'Continuar' : 'Ouvir texto'}</span>
+                  </button>
+                  {(nativeSpeaking || nativePaused) && (
+                    <button type="button" onClick={stopNativeSpeech} aria-label="Parar narração"
+                      className="p-2.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300">
+                      <StopCircle className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2">
+                <label className="text-xs text-slate-600 dark:text-slate-300">
+                  Voz disponível
+                  <select value={selectedVoiceURI} onChange={(event) => { stopNativeSpeech(); setSelectedVoiceURI(event.target.value); }}
+                    className="mt-1 w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-xs">
+                    <option value="">Voz padrão ({nativeLocale})</option>
+                    {speechVoices.filter((voice) => voice.lang.toLowerCase().startsWith(nativeLocale.slice(0, 2).toLowerCase())).map((voice) => (
+                      <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name} · {voice.lang}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-xs text-slate-600 dark:text-slate-300">
+                  Velocidade · {nativeRate.toFixed(2)}x
+                  <select value={nativeRate} onChange={(event) => { stopNativeSpeech(); setNativeRate(Number(event.target.value)); }}
+                    className="mt-1 w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-xs">
+                    <option value={0.75}>0,75x</option><option value={1}>1x</option><option value={1.25}>1,25x</option><option value={1.5}>1,5x</option>
+                  </select>
+                </label>
+              </div>
+              {speechVoices.filter((voice) => voice.lang.toLowerCase().startsWith(nativeLocale.slice(0, 2).toLowerCase())).length === 0 && (
+                <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">Nenhuma voz de {nativeLocale} foi detectada. Instale uma voz desse idioma nas configurações do dispositivo.</p>
+              )}
+              {nativeSpeechError && <p role="alert" className="mt-2 text-xs text-red-600 dark:text-red-400">{nativeSpeechError}</p>}
+            </section>
           )}
 
           {/* On-demand TTS generation. Existing audio remains compatible with manual uploads. */}

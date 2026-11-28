@@ -94,7 +94,7 @@ Deno.serve(async (req: Request) => {
     const alignmentApiKey = Deno.env.get("ALIGNMENT_SERVICE_API_KEY") || "";
     if (!alignmentUrl) {
       return json({
-        error: "O serviço de alinhamento ainda não está conectado. Configure ALIGNMENT_SERVICE_URL e ALIGNMENT_SERVICE_API_KEY nos secrets do Supabase.",
+        error: "O serviço de alinhamento ainda não está conectado. Configure ALIGNMENT_SERVICE_URL nos secrets do Supabase e ALIGNMENT_SERVICE_API_KEY se o serviço exigir autenticação.",
         code: "ALIGNMENT_SERVICE_NOT_CONFIGURED",
       }, 503);
     }

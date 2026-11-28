@@ -76,8 +76,8 @@ Deno.serve(async (req: Request) => {
     }
     if (!text.audio_url) return json({ error: "Esta publicação ainda não possui áudio." }, 400);
 
-    const content = String(text.content || "").trim();
-    if (!content) return json({ error: "O texto está vazio." }, 400);
+    const content = String(text.content || "");
+    if (!content.trim()) return json({ error: "O texto está vazio." }, 400);
     if (content.length > 20000) return json({ error: "O texto ultrapassa o limite de 20.000 caracteres." }, 413);
 
     // Only allow media already stored in this WenLang Supabase project.
@@ -112,7 +112,7 @@ Deno.serve(async (req: Request) => {
         word_timestamps: true,
         return_character_offsets: true,
       }),
-      signal: AbortSignal.timeout(180000),
+      signal: AbortSignal.timeout(120000),
     });
 
     if (!response.ok) {
@@ -123,7 +123,7 @@ Deno.serve(async (req: Request) => {
 
     const result = await response.json().catch(() => null);
     const words: AlignedWord[] = Array.isArray(result?.words) ? result.words : [];
-    if (!words.length) {
+    if (!words.length || words.length > 5000) {
       return json({ error: "O serviço não retornou palavras alinhadas em formato válido." }, 502);
     }
 

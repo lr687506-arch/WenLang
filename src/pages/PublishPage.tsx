@@ -764,7 +764,7 @@ export function PublishPage({ textId, initialLanguage, onPublished, onCancel }: 
                 </span>
                 <input
                   type="file"
-                  accept=".mp3,.wav,.ogg,.m4a,audio/*"
+                  accept=".mp3,.wav,.ogg,.m4a,.aac,audio/*"
                   onChange={handleAudioChange}
                   className="hidden"
                 />
